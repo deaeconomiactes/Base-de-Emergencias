@@ -23,7 +23,12 @@ params: dict = {"limite": limite}
 if q:
     conds.append(
         "(p.ProductorDenominacion LIKE :q OR p.CUITCUIL LIKE :q "
-        "OR p.DocumentoNro LIKE :q)"
+        "OR p.DocumentoNro LIKE :q OR EXISTS ("
+        "SELECT 1 FROM ddjj_personas djq "
+        "WHERE djq.id_productor = p.ProductorId "
+        "AND (djq.nombre LIKE :q OR CAST(djq.cuit AS CHAR) LIKE :q "
+        "OR CAST(djq.num_doc AS CHAR) LIKE :q)"
+        "))"
     )
     params["q"] = f"%{q}%"
 if act_sel:
@@ -69,6 +74,38 @@ st.caption(f"Mostrando **{len(df)}** productores (límite {limite}).")
 st.dataframe(df, use_container_width=True, hide_index=True, height=620)
 
 if not df.empty:
+    active_filter = bool(q or act_sel)
+    if active_filter:
+        ids = df["id"].dropna().astype(int).tolist()
+        id_params = {f"pid{i}": pid for i, pid in enumerate(ids)}
+        id_placeholders = ",".join(f":pid{i}" for i in range(len(ids)))
+        registros = run_query(
+            f"""
+            SELECT
+                p.ProductorId AS productor_id,
+                p.ProductorDenominacion AS productor,
+                dj.id_ddjj,
+                dj.nombre AS nombre_en_ddjj,
+                dj.fecha,
+                r.numero_resolucion AS decreto,
+                r.nombre_resolucion AS descripcion_decreto,
+                dj.departamento,
+                dj.localidad,
+                dj.paraje,
+                dj.pondf,
+                dj.estado
+            FROM ddjj_personas dj
+            LEFT JOIN productores p ON p.ProductorId = dj.id_productor
+            LEFT JOIN resoluciones r ON r.id_resolucion = dj.id_resolucion
+            WHERE dj.id_productor IN ({id_placeholders})
+            ORDER BY p.ProductorDenominacion, dj.fecha DESC, dj.id_ddjj DESC
+            """,
+            id_params,
+        )
+        st.subheader("Registros cargados para los productores filtrados")
+        st.caption(f"Mostrando **{len(registros)}** DDJJ asociadas a la busqueda.")
+        st.dataframe(registros, use_container_width=True, hide_index=True, height=360)
+
     sel = st.selectbox(
         "Ver DDJJ de un productor",
         [""] + df["id"].astype(str).tolist(),
