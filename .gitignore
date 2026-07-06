@@ -2,19 +2,28 @@
 .env
 dashboard/.streamlit/secrets.toml
 
+# Datos y reportes locales
+data_raw/
+data_clean/
+data_intermediate/
+*.xlsx
+
 # Dumps de la base (pueden ser pesados o sensibles)
 *.sql
 *.sql.gz
 *.dump
+*.bak
 !ejemplo.sql
 
 # Python
 __pycache__/
 *.pyc
 .venv/
+.venv_local/
 venv/
 .python-version
 
 # Sistema
+__MACOSX/
 .DS_Store
 *.log
