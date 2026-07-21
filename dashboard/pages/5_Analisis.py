@@ -420,11 +420,6 @@ else:
         params_mejoras,
     )
 
-st.caption(
-    "Se consideran mejoras afectadas solo aquellas con valor o perdida informada positiva. "
-    "Las declaraciones sin dato o con valor cero no se cuentan como afectacion declarada."
-)
-
 if not df_mejoras.empty:
     metric_column = {
         "DDJJ con mejora afectada": "ddjj_con_mejora",
@@ -462,33 +457,59 @@ if not df_mejoras.empty:
             "pct_perdida_prom": "Incidencia promedio",
         },
     )
-    fig.update_layout(height=max(420, top_n * 22), margin=dict(t=20, b=20, l=20, r=20))
+    fig.update_layout(
+        height=max(420, top_n * 22),
+        margin=dict(t=20, b=20, l=20, r=20),
+        xaxis_title=metric_label,
+    )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "Se consideran mejoras afectadas solo aquellas con valor o incidencia informada positiva. "
+        "Las declaraciones sin dato o con valor cero no se cuentan como afectacion declarada."
+    )
+
+    def format_number(value, decimals: int = 0) -> str:
+        if pd.isna(value):
+            return "Sin dato"
+        text = f"{float(value):,.{decimals}f}"
+        return text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    def format_integer(value) -> str:
+        if pd.isna(value):
+            return "Sin dato"
+        return f"{int(value):,}".replace(",", ".")
+
+    df_mejoras_tabla = df_mejoras.rename(
+        columns={
+            "mejora": "Tipo de mejora",
+            "ddjj_con_mejora": "DDJJ con mejora afectada",
+            "valor_total": "Valor total declarado",
+            "valor_prom": "Valor promedio",
+            "pct_perdida_prom": "Incidencia promedio",
+        }
+    ).copy()
+    df_mejoras_tabla["DDJJ con mejora afectada"] = df_mejoras_tabla[
+        "DDJJ con mejora afectada"
+    ].apply(format_integer)
+    df_mejoras_tabla["Valor total declarado"] = df_mejoras_tabla[
+        "Valor total declarado"
+    ].apply(format_number)
+    df_mejoras_tabla["Valor promedio"] = df_mejoras_tabla["Valor promedio"].apply(
+        format_number
+    )
+    df_mejoras_tabla["Incidencia promedio"] = df_mejoras_tabla[
+        "Incidencia promedio"
+    ].apply(lambda value: format_number(value, 2))
+    df_mejoras_tabla = df_mejoras_tabla.fillna("Sin dato")
 
     st.dataframe(
-        df_mejoras.rename(
-            columns={
-                "mejora": "Tipo de mejora",
-                "ddjj_con_mejora": "DDJJ con mejora afectada",
-                "valor_total": "Valor total declarado",
-                "valor_prom": "Valor promedio",
-                "pct_perdida_prom": "Incidencia promedio",
-            }
-        ),
+        df_mejoras_tabla,
         hide_index=True,
         use_container_width=True,
-        column_config={
-            "DDJJ con mejora afectada": st.column_config.NumberColumn(
-                "DDJJ con mejora afectada", format="%d"
-            ),
-            "Valor total declarado": st.column_config.NumberColumn(
-                "Valor total declarado", format="%.0f"
-            ),
-            "Valor promedio": st.column_config.NumberColumn("Valor promedio", format="%.0f"),
-            "Incidencia promedio": st.column_config.NumberColumn(
-                "Incidencia promedio", format="%.2f"
-            ),
-        },
+    )
+    st.caption(
+        "Los valores declarados se muestran en la unidad monetaria o escala original de la fuente. "
+        "La incidencia promedio se muestra en la escala original disponible en la base."
     )
 else:
     st.info("Sin mejoras afectadas declaradas para los filtros seleccionados.")
