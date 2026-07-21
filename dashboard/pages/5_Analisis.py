@@ -374,49 +374,124 @@ else:
     st.info("Sin datos ganaderos para los filtros seleccionados.")
 
 # ---------- Top mejoras perdidas ----------
-st.subheader("Top tipos de mejora declaradas")
-df_mejoras = run_query(
-    f"""
-    SELECT pm.mejora, COUNT(*) AS declaraciones,
-           ROUND(AVG(pm.vestimado),0) AS valor_prom,
-           ROUND(AVG(pm.pesper),1) AS pct_perdida_prom
-    FROM perdidas_mejoras pm
-    JOIN ddjj_personas dj ON dj.id_ddjj = pm.idddjj
-    WHERE {where_actual if not unified else '1=1'}
-    GROUP BY pm.mejora
-    ORDER BY declaraciones DESC
-    LIMIT :top_n
-    """,
-    {**params_actual, "top_n": int(top_n)} if not unified else {"top_n": int(top_n)},
+st.subheader("Mejoras afectadas declaradas")
+metrica_mejoras = st.selectbox(
+    "Ordenar mejoras por",
+    ["DDJJ con mejora afectada", "Valor total declarado", "Incidencia promedio"],
 )
+
+if unified and origen_sel == "historico":
+    df_mejoras = pd.DataFrame()
+else:
+    filters_mejoras = ["1=1"]
+    params_mejoras: dict = {}
+    if unified:
+        if res_num is not None:
+            filters_mejoras.append("r.numero_resolucion = :res_num")
+            params_mejoras["res_num"] = res_num
+        if anio_sel != "(todos)":
+            filters_mejoras.append("YEAR(dj.fecha) = :anio")
+            params_mejoras["anio"] = int(anio_sel)
+    else:
+        filters_mejoras = filters_actual.copy()
+        params_mejoras = params_actual.copy()
+
+    where_mejoras = " AND ".join(filters_mejoras)
+    df_mejoras = run_query(
+        f"""
+        SELECT
+            COALESCE(NULLIF(TRIM(pm.mejora), ''), '(s/d)') AS mejora,
+            COUNT(DISTINCT pm.idddjj) AS ddjj_con_mejora,
+            ROUND(SUM(COALESCE(pm.vestimado, 0)), 0) AS valor_total,
+            ROUND(AVG(CASE WHEN pm.vestimado > 0 THEN pm.vestimado END), 0) AS valor_prom,
+            ROUND(AVG(CASE WHEN pm.incidencia > 0 THEN pm.incidencia END), 1) AS pct_perdida_prom
+        FROM perdidas_mejoras pm
+        JOIN ddjj_personas dj ON dj.id_ddjj = pm.idddjj
+        LEFT JOIN resoluciones r ON r.id_resolucion = dj.id_resolucion
+        WHERE {where_mejoras}
+          AND (
+              COALESCE(pm.vestimado, 0) > 0
+              OR COALESCE(pm.incidencia, 0) > 0
+              OR COALESCE(pm.pesesp, 0) > 0
+              OR COALESCE(pm.pesper, 0) > 0
+          )
+        GROUP BY COALESCE(NULLIF(TRIM(pm.mejora), ''), '(s/d)')
+        """,
+        params_mejoras,
+    )
+
+st.caption(
+    "Se consideran mejoras afectadas solo aquellas con valor o perdida informada positiva. "
+    "Las declaraciones sin dato o con valor cero no se cuentan como afectacion declarada."
+)
+
 if not df_mejoras.empty:
-    df_mejoras = df_mejoras.sort_values("declaraciones", ascending=True)
-    df_mejoras["mejora_label"] = df_mejoras["mejora"].apply(short_label)
+    metric_column = {
+        "DDJJ con mejora afectada": "ddjj_con_mejora",
+        "Valor total declarado": "valor_total",
+        "Incidencia promedio": "pct_perdida_prom",
+    }[metrica_mejoras]
+    metric_label = {
+        "ddjj_con_mejora": "DDJJ con mejora afectada",
+        "valor_total": "Valor total declarado",
+        "pct_perdida_prom": "Incidencia promedio",
+    }[metric_column]
+
+    df_mejoras = df_mejoras.sort_values(metric_column, ascending=False).head(top_n).copy()
+    df_mejoras_plot = df_mejoras.sort_values(metric_column, ascending=True).copy()
+    df_mejoras_plot["mejora_label"] = df_mejoras_plot["mejora"].apply(short_label)
     fig = px.bar(
-        df_mejoras,
-        x="declaraciones",
+        df_mejoras_plot,
+        x=metric_column,
         y="mejora_label",
         orientation="h",
         hover_data={
             "mejora": True,
             "mejora_label": False,
+            "ddjj_con_mejora": ":,.0f",
+            "valor_total": ":,.0f",
             "valor_prom": ":,.0f",
             "pct_perdida_prom": ":.1f",
         },
         labels={
-            "declaraciones": "Declaraciones",
+            metric_column: metric_label,
             "mejora_label": "",
+            "ddjj_con_mejora": "DDJJ con mejora afectada",
+            "valor_total": "Valor total declarado",
             "valor_prom": "Valor promedio",
-            "pct_perdida_prom": "% perdida prom.",
+            "pct_perdida_prom": "Incidencia promedio",
         },
     )
     fig.update_layout(height=max(420, top_n * 22), margin=dict(t=20, b=20, l=20, r=20))
     st.plotly_chart(fig, use_container_width=True)
+
     st.dataframe(
-        df_mejoras.sort_values("declaraciones", ascending=False).drop(columns=["mejora_label"]),
+        df_mejoras.rename(
+            columns={
+                "mejora": "Tipo de mejora",
+                "ddjj_con_mejora": "DDJJ con mejora afectada",
+                "valor_total": "Valor total declarado",
+                "valor_prom": "Valor promedio",
+                "pct_perdida_prom": "Incidencia promedio",
+            }
+        ),
         hide_index=True,
         use_container_width=True,
+        column_config={
+            "DDJJ con mejora afectada": st.column_config.NumberColumn(
+                "DDJJ con mejora afectada", format="%d"
+            ),
+            "Valor total declarado": st.column_config.NumberColumn(
+                "Valor total declarado", format="%.0f"
+            ),
+            "Valor promedio": st.column_config.NumberColumn("Valor promedio", format="%.0f"),
+            "Incidencia promedio": st.column_config.NumberColumn(
+                "Incidencia promedio", format="%.2f"
+            ),
+        },
     )
+else:
+    st.info("Sin mejoras afectadas declaradas para los filtros seleccionados.")
 
 # ---------- Tipo juridico de productores ----------
 st.subheader("Productores por tipo juridico y actividad")
