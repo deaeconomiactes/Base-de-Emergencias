@@ -40,13 +40,23 @@ fecha_base_filter = "" if is_unified_mode() else "WHERE fecha > '2000-01-01'"
 
 # ---------- KPIs ----------
 kpis = kpis_generales()
+
+
+def formato_conteo(valor) -> str:
+    return "Sin dato" if valor is None else f"{int(valor):,}"
+
+
+def formato_porcentaje(valor) -> str:
+    return "Sin dato" if valor is None else f"{valor:.1f}%"
+
+
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Productores", f"{int(kpis['productores']):,}")
-c2.metric("DDJJ", f"{int(kpis['ddjj']):,}")
-c3.metric("Resoluciones", f"{int(kpis['resoluciones']):,}")
-c4.metric("Establecimientos", f"{int(kpis['establecimientos']):,}")
-c5.metric("Adremas", f"{int(kpis['adremas']):,}")
-c6.metric("% dano promedio", f"{kpis['pondf_promedio'] or 0:.1f}%")
+c1.metric("Productores", formato_conteo(kpis["productores"]))
+c2.metric("DDJJ", formato_conteo(kpis["ddjj"]))
+c3.metric("Resoluciones", formato_conteo(kpis["resoluciones"]))
+c4.metric("Establecimientos", formato_conteo(kpis["establecimientos"]))
+c5.metric("Adremas", formato_conteo(kpis["adremas"]))
+c6.metric("% dano promedio", formato_porcentaje(kpis["pondf_promedio"]))
 
 st.divider()
 

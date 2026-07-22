@@ -237,28 +237,41 @@ def list_departamentos_ddjj() -> list[str]:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def kpis_generales() -> dict:
-    if is_unified_mode():
+    """Calcula cada KPI por separado para aislar fallos de TiDB."""
+    kpis = {
+        "productores": None,
+        "ddjj": None,
+        "resoluciones": None,
+        "establecimientos": None,
+        "adremas": None,
+        "pondf_promedio": None,
+    }
+
+    consultas = {
+        "productores": f"SELECT COUNT(*) AS valor FROM {table('productores')}",
+        "ddjj": f"SELECT COUNT(*) AS valor FROM {table('ddjj_personas')}",
+        "resoluciones": f"SELECT COUNT(*) AS valor FROM {table('resoluciones')}",
+        "establecimientos": "SELECT COUNT(*) AS valor FROM establecimientos",
+        "adremas": "SELECT COUNT(*) AS valor FROM adremas",
+    }
+
+    for nombre, sql in consultas.items():
+        try:
+            df = run_query(sql)
+            if not df.empty and pd.notna(df.iloc[0]["valor"]):
+                kpis[nombre] = int(df.iloc[0]["valor"])
+        except Exception:
+            kpis[nombre] = None
+
+    try:
+        ddjj_table = table("ddjj_personas")
         df = run_query(
-            """
-            SELECT
-              (SELECT COUNT(*) FROM vw_all_productores) AS productores,
-              (SELECT COUNT(*) FROM vw_all_ddjj_personas) AS ddjj,
-              (SELECT COUNT(*) FROM vw_all_resoluciones) AS resoluciones,
-              (SELECT COUNT(*) FROM establecimientos) AS establecimientos,
-              (SELECT COUNT(*) FROM adremas) AS adremas,
-              (SELECT ROUND(AVG(pondf),2) FROM vw_all_ddjj_personas WHERE pondf>0) AS pondf_promedio
-            """
+            f"SELECT ROUND(AVG(pondf), 2) AS valor FROM {ddjj_table} "
+            "WHERE pondf IS NOT NULL AND pondf > 0"
         )
-        return df.iloc[0].to_dict()
-    df = run_query(
-        """
-        SELECT
-          (SELECT COUNT(*) FROM productores) AS productores,
-          (SELECT COUNT(*) FROM ddjj_personas) AS ddjj,
-          (SELECT COUNT(*) FROM resoluciones) AS resoluciones,
-          (SELECT COUNT(*) FROM establecimientos) AS establecimientos,
-          (SELECT COUNT(*) FROM adremas) AS adremas,
-          (SELECT ROUND(AVG(pondf),2) FROM ddjj_personas WHERE pondf>0) AS pondf_promedio
-        """
-    )
-    return df.iloc[0].to_dict()
+        if not df.empty and pd.notna(df.iloc[0]["valor"]):
+            kpis["pondf_promedio"] = float(df.iloc[0]["valor"])
+    except Exception:
+        kpis["pondf_promedio"] = None
+
+    return kpis
