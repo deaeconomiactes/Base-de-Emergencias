@@ -77,8 +77,6 @@ c4.metric("Establecimientos", formato_conteo(kpis["establecimientos"]))
 c5.metric("Adremas", formato_conteo(kpis["adremas"]))
 c6.metric("Daño promedio", formato_porcentaje(kpis["pondf_promedio"]))
 
-st.divider()
-
 # ---------- Filtros globales ----------
 with st.sidebar:
     st.header("Filtros")
@@ -222,8 +220,96 @@ def where_filtros(prefix="dj.") -> tuple[str, dict]:
 
 where_sql, params = where_filtros()
 
+# ---------- Evolucion anual de DDJJ ----------
+st.subheader("Evolución de DDJJ por año")
+df_evolucion = run_query(
+    f"""
+    SELECT YEAR(dj.fecha) AS anio, COUNT(*) AS ddjj
+    FROM {ddjj_table} dj
+    WHERE {where_sql}
+    GROUP BY YEAR(dj.fecha)
+    ORDER BY anio
+    """,
+    params,
+)
+if not df_evolucion.empty:
+    df_evolucion["ddjj"] = pd.to_numeric(
+        df_evolucion["ddjj"], errors="coerce"
+    ).fillna(0)
+    registros_sin_anio = int(
+        df_evolucion.loc[df_evolucion["anio"].isna(), "ddjj"].sum()
+    )
+    df_evolucion_anual = (
+        df_evolucion.dropna(subset=["anio"])
+        .rename(columns={"anio": "Año", "ddjj": "DDJJ"})
+        .copy()
+    )
+    df_evolucion_anual["Año"] = df_evolucion_anual["Año"].astype(int)
+    df_evolucion_anual["DDJJ"] = df_evolucion_anual["DDJJ"].astype(int)
+
+    if not df_evolucion_anual.empty:
+        anio_min = int(df_evolucion_anual["Año"].min())
+        anio_max = int(df_evolucion_anual["Año"].max())
+        rango_anual = pd.DataFrame({"Año": range(anio_min, anio_max + 1)})
+        df_evolucion_anual = rango_anual.merge(
+            df_evolucion_anual,
+            on="Año",
+            how="left",
+        )
+        df_evolucion_anual["DDJJ"] = df_evolucion_anual["DDJJ"].fillna(0).astype(int)
+        df_evolucion_anual["Etiqueta"] = df_evolucion_anual["DDJJ"].map(
+            lambda valor: f"{valor:,}" if valor > 0 else ""
+        )
+
+        fig = px.bar(
+            df_evolucion_anual,
+            x="Año",
+            y="DDJJ",
+            text="Etiqueta",
+        )
+        fig.update_traces(
+            texttemplate="%{text}",
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="Año: %{x}<br>DDJJ: %{y:,}<extra></extra>",
+        )
+        fig.update_xaxes(title_text="Año", tickmode="linear", dtick=1)
+        fig.update_yaxes(title_text="Cantidad de DDJJ")
+        fig.update_layout(
+            title_text="",
+            height=360,
+            showlegend=False,
+            margin=dict(l=45, r=25, t=25, b=40),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        tabla_evolucion = df_evolucion_anual[["Año", "DDJJ"]].copy()
+        tabla_evolucion["DDJJ"] = tabla_evolucion["DDJJ"].map(
+            lambda valor: f"{valor:,}"
+        )
+        with st.expander("Ver tabla de evolución anual"):
+            st.dataframe(tabla_evolucion, hide_index=True, use_container_width=True)
+
+        st.caption(
+            "La evolución anual se calcula con el campo temporal disponible "
+            "actualmente. Los años sin registros se muestran en cero dentro del "
+            "conjunto filtrado. La cobertura histórica puede depender de la "
+            "disponibilidad de fecha, año informado y filtros activos."
+        )
+        if registros_sin_anio:
+            st.caption(
+                f"Registros sin año disponible: {registros_sin_anio:,}."
+            )
+    else:
+        st.info("No hay datos temporales para los filtros seleccionados.")
+        if registros_sin_anio:
+            st.caption(f"Registros sin año disponible: {registros_sin_anio:,}.")
+else:
+    st.info("No hay datos temporales para los filtros seleccionados.")
+
 # ---------- DDJJ por Resolucion ----------
-st.subheader("DDJJ por Resolucion")
+st.divider()
+st.subheader("Top resoluciones por cantidad de DDJJ")
 if is_unified_mode():
     df_res = run_query(
         f"""
@@ -254,22 +340,81 @@ else:
         params,
     )
 if not df_res.empty:
-    fig = px.bar(
-        df_res,
-        x="resolucion",
-        y="ddjj",
-        hover_data=["nombre"],
-        labels={"resolucion": "Resolucion", "ddjj": "DDJJ"},
+    df_top = df_res.rename(
+        columns={
+            "resolucion": "Resolución / DTO",
+            "ddjj": "DDJJ",
+            "nombre": "Nombre",
+            "anio": "Año",
+            "departamentos": "Departamentos",
+        }
+    ).copy()
+    df_top["Resolución / DTO"] = (
+        df_top["Resolución / DTO"]
+        .fillna("Sin dato")
+        .astype(str)
+        .str.strip()
+        .replace("", "Sin dato")
     )
-    fig.update_layout(height=380, margin=dict(t=10, b=10))
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Sin datos para los filtros seleccionados.")
+    df_top["DDJJ"] = pd.to_numeric(df_top["DDJJ"], errors="coerce").fillna(0)
+    df_top = df_top.sort_values("DDJJ", ascending=False).head(15)
+    df_top = df_top.sort_values("DDJJ", ascending=True)
 
-# ---------- DDJJ por Departamento (top 15) ----------
+    columnas_opcionales = [
+        col for col in ["Nombre", "Año", "Departamentos"] if col in df_top.columns
+    ]
+    for column in columnas_opcionales:
+        df_top[column] = df_top[column].map(texto_valor)
+
+    fig = px.bar(
+        df_top,
+        x="DDJJ",
+        y="Resolución / DTO",
+        orientation="h",
+        text="DDJJ",
+    )
+    fig.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside",
+        cliponaxis=False,
+    )
+    fig.update_yaxes(type="category", title_text="Resolución / DTO")
+    fig.update_xaxes(title_text="Cantidad de DDJJ")
+    fig.update_layout(
+        title=None,
+        height=max(360, 28 * len(df_top) + 100),
+        showlegend=False,
+        margin=dict(l=120, r=40, t=20, b=40),
+    )
+    fig.update_layout(title_text="")
+    fig.update_layout(
+        annotations=[
+            annotation
+            for annotation in (fig.layout.annotations or ())
+            if str(annotation.text).strip().lower() != "undefined"
+        ]
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    columnas_tabla = ["Resolución / DTO", "DDJJ"]
+    columnas_tabla.extend(
+        col for col in ["Año", "Departamentos"] if col in df_top.columns
+    )
+    tabla_resoluciones = (
+        df_top[columnas_tabla]
+        .sort_values("DDJJ", ascending=False)
+        .reset_index(drop=True)
+    )
+    tabla_resoluciones["DDJJ"] = tabla_resoluciones["DDJJ"].astype(int)
+
+    st.dataframe(tabla_resoluciones, hide_index=True, use_container_width=True)
+else:
+    st.info("No hay declaraciones juradas para los filtros seleccionados.")
+
+# ---------- DDJJ por Departamento (top 12) ----------
 left, right = st.columns(2)
 with left:
-    st.subheader("Top 15 Departamentos")
+    st.subheader("Top departamentos por cantidad de DDJJ")
     df_dep = run_query(
         f"""
         SELECT dj.departamento, COUNT(*) AS ddjj,
@@ -283,50 +428,171 @@ with left:
         params,
     )
     if not df_dep.empty:
-        fig = px.bar(
-            df_dep,
-            x="ddjj",
-            y="departamento",
-            orientation="h",
-            hover_data=["pondf_prom"],
-            labels={"ddjj": "DDJJ", "departamento": "", "pondf_prom": "% prom."},
+        df_departamentos = df_dep.rename(
+            columns={
+                "departamento": "Departamento",
+                "ddjj": "DDJJ",
+                "productores": "Productores",
+                "resoluciones": "Resoluciones",
+            }
+        ).copy()
+        df_departamentos["Departamento"] = (
+            df_departamentos["Departamento"]
+            .fillna("Sin dato")
+            .astype(str)
+            .str.strip()
+            .replace("", "Sin dato")
         )
-        fig.update_layout(height=460, yaxis=dict(autorange="reversed"), margin=dict(t=10, b=10))
+        df_departamentos["DDJJ"] = pd.to_numeric(
+            df_departamentos["DDJJ"], errors="coerce"
+        ).fillna(0)
+        df_top_deptos = (
+            df_departamentos.sort_values("DDJJ", ascending=False)
+            .head(12)
+            .sort_values("DDJJ", ascending=True)
+        )
+
+        fig = px.bar(
+            df_top_deptos,
+            x="DDJJ",
+            y="Departamento",
+            orientation="h",
+            text="DDJJ",
+        )
+        fig.update_traces(
+            texttemplate="%{text:,.0f}",
+            textposition="outside",
+            cliponaxis=False,
+        )
+        fig.update_yaxes(type="category", title_text="Departamento")
+        fig.update_xaxes(title_text="Cantidad de DDJJ")
+        fig.update_layout(
+            title_text="",
+            height=max(360, 24 * len(df_top_deptos) + 80),
+            showlegend=False,
+            margin=dict(l=80, r=25, t=10, b=35),
+        )
         st.plotly_chart(fig, use_container_width=True)
+
+        columnas_departamentos = ["Departamento", "DDJJ"]
+        columnas_departamentos.extend(
+            col
+            for col in ["Productores", "Resoluciones"]
+            if col in df_departamentos.columns
+        )
+        tabla_departamentos = (
+            df_top_deptos[columnas_departamentos]
+            .sort_values("DDJJ", ascending=False)
+            .reset_index(drop=True)
+        )
+        tabla_departamentos["DDJJ"] = tabla_departamentos["DDJJ"].astype(int)
+        tabla_departamentos_mostrar = tabla_departamentos.copy()
+        tabla_departamentos_mostrar["DDJJ"] = tabla_departamentos_mostrar[
+            "DDJJ"
+        ].map(lambda valor: f"{valor:,}")
+        with st.expander("Ver tabla de departamentos"):
+            st.dataframe(
+                tabla_departamentos_mostrar,
+                hide_index=True,
+                use_container_width=True,
+            )
+    else:
+        st.info("No hay departamentos para los filtros seleccionados.")
 
 # ---------- Distribucion de % dano ----------
 with right:
-    st.subheader("Distribucion de % de dano")
+    st.subheader("Declaraciones por tramo de daño")
     df_p = run_query(
         f"""
         SELECT dj.pondf
         FROM {ddjj_table} dj
-        WHERE {where_sql} AND dj.pondf > 0
+        WHERE {where_sql}
         """,
         params,
     )
     if not df_p.empty:
-        fig = px.histogram(df_p, x="pondf", nbins=20, labels={"pondf": "% de dano"})
-        fig.update_layout(height=460, margin=dict(t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        valores_dano = pd.to_numeric(df_p["pondf"], errors="coerce")
 
-# ---------- DDJJ por mes ----------
-st.subheader("Evolucion mensual de DDJJ")
-df_t = run_query(
-    f"""
-    SELECT DATE_FORMAT(dj.fecha,'%Y-%m') AS mes, COUNT(*) AS ddjj,
-           ROUND(AVG(dj.pondf),1) AS pondf_prom
-    FROM {ddjj_table} dj
-    WHERE {where_sql}
-    GROUP BY mes
-    ORDER BY mes
-    """,
-    params,
-)
-if not df_t.empty:
-    fig = px.line(df_t, x="mes", y="ddjj", markers=True, hover_data=["pondf_prom"])
-    fig.update_layout(height=360, margin=dict(t=10, b=10))
-    st.plotly_chart(fig, use_container_width=True)
+        def clasificar_tramo_dano(valor) -> str:
+            if pd.isna(valor) or valor < 0:
+                return "Sin dato"
+            if valor <= 25:
+                return "0% a 25%"
+            if valor <= 50:
+                return "25% a 50%"
+            if valor <= 75:
+                return "50% a 75%"
+            if valor <= 100:
+                return "75% a 100%"
+            return "Más de 100%"
+
+        orden_tramos = [
+            "0% a 25%",
+            "25% a 50%",
+            "50% a 75%",
+            "75% a 100%",
+            "Más de 100%",
+            "Sin dato",
+        ]
+        tramos_dano = valores_dano.map(clasificar_tramo_dano)
+        conteos_tramos = tramos_dano.value_counts().reindex(orden_tramos, fill_value=0)
+        tabla_dano = conteos_tramos.rename_axis("Tramo de daño").reset_index(name="DDJJ")
+        total_dano = int(tabla_dano["DDJJ"].sum())
+        tabla_dano["Participación"] = (
+            tabla_dano["DDJJ"] / total_dano * 100 if total_dano else 0.0
+        )
+        tabla_dano["Tramo de daño"] = tabla_dano["Tramo de daño"].astype(str)
+
+        grafico_dano = tabla_dano.loc[tabla_dano["DDJJ"] > 0].copy()
+        if not grafico_dano.empty:
+            fig = px.bar(
+                grafico_dano,
+                x="Tramo de daño",
+                y="DDJJ",
+                text="DDJJ",
+            )
+            fig.update_traces(
+                texttemplate="%{text:,.0f}",
+                textposition="outside",
+                cliponaxis=False,
+            )
+            fig.update_xaxes(
+                title_text="Tramo de daño",
+                type="category",
+                categoryorder="array",
+                categoryarray=orden_tramos,
+            )
+            fig.update_yaxes(title_text="Cantidad de DDJJ")
+            fig.update_layout(
+                title_text="",
+                height=360,
+                showlegend=False,
+                margin=dict(l=35, r=20, t=10, b=50),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No hay datos de daño para los filtros seleccionados.")
+
+        tabla_dano_mostrar = tabla_dano.copy()
+        tabla_dano_mostrar["DDJJ"] = tabla_dano_mostrar["DDJJ"].map(
+            lambda valor: f"{int(valor):,}"
+        )
+        tabla_dano_mostrar["Participación"] = tabla_dano_mostrar[
+            "Participación"
+        ].map(lambda valor: f"{valor:.1f}%")
+        with st.expander("Ver tabla de tramos de daño"):
+            st.dataframe(
+                tabla_dano_mostrar,
+                hide_index=True,
+                use_container_width=True,
+            )
+        st.caption(
+            "El daño ponderado se agrupa en tramos. Los registros sin porcentaje "
+            "informado se clasifican como Sin dato cuando no son excluidos por "
+            "filtros activos."
+        )
+    else:
+        st.info("No hay datos de daño para los filtros seleccionados.")
 
 st.divider()
 st.caption(
