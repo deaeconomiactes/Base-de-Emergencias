@@ -21,11 +21,37 @@ from utils import (
 
 # ---------- Encabezado ----------
 info = db_info()
-st.title("Sistema de Emergencias Agropecuarias")
+st.title("Registro de Emergencias Agropecuarias")
 st.caption(
-    f"Conectado a: **{info['source']}** | `{info['host']}` | "
-    f"base `{info['db']}` | modo `{info['mode']}`"
+    "Tablero de seguimiento de declaraciones juradas, productores, "
+    "resoluciones y afectación agropecuaria."
 )
+
+
+def es_sin_dato(valor) -> bool:
+    if valor is None:
+        return True
+    if isinstance(valor, str):
+        return not valor.strip()
+    try:
+        return bool(pd.isna(valor))
+    except (TypeError, ValueError):
+        return False
+
+
+def texto_valor(valor) -> str:
+    return "Sin dato" if es_sin_dato(valor) else str(valor)
+
+
+with st.expander("Información técnica"):
+    st.markdown(
+        f"- **Fuente:** {texto_valor(info.get('source'))}\n"
+        f"- **Host:** `{texto_valor(info.get('host'))}`\n"
+        f"- **Base:** `{texto_valor(info.get('db'))}`\n"
+        f"- **Modo:** `{texto_valor(info.get('mode'))}`"
+    )
+
+resumen_filtros = st.empty()
 
 ddjj_table = table("ddjj_personas")
 res_table = table("resoluciones")
@@ -36,11 +62,11 @@ kpis = kpis_generales()
 
 
 def formato_conteo(valor) -> str:
-    return "Sin dato" if valor is None else f"{int(valor):,}"
+    return "Sin dato" if es_sin_dato(valor) else f"{int(valor):,}"
 
 
 def formato_porcentaje(valor) -> str:
-    return "Sin dato" if valor is None else f"{valor:.1f}%"
+    return "Sin dato" if es_sin_dato(valor) else f"{valor:.1f}%"
 
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -49,7 +75,7 @@ c2.metric("DDJJ", formato_conteo(kpis["ddjj"]))
 c3.metric("Resoluciones", formato_conteo(kpis["resoluciones"]))
 c4.metric("Establecimientos", formato_conteo(kpis["establecimientos"]))
 c5.metric("Adremas", formato_conteo(kpis["adremas"]))
-c6.metric("% dano promedio", formato_porcentaje(kpis["pondf_promedio"]))
+c6.metric("Daño promedio", formato_porcentaje(kpis["pondf_promedio"]))
 
 st.divider()
 
@@ -110,6 +136,46 @@ with st.sidebar:
         "f_hasta": str(f_hasta),
         "origen_dato": None if origen_sel == "(todos)" else origen_sel,
     }
+
+
+def texto_filtro(valor, marcadores_todos=()) -> str:
+    if isinstance(valor, (list, tuple)):
+        if not valor:
+            return "Todos"
+        valores = [texto_valor(item) for item in valor]
+        return ", ".join(valores)
+    if es_sin_dato(valor):
+        return "Sin dato"
+    if valor in marcadores_todos:
+        return "Todos"
+    return str(valor)
+
+
+resolucion_texto = texto_filtro(res_sel, {"(todas)"})
+origen_texto = texto_filtro(origen_sel, {"(todos)"})
+departamento_texto = texto_filtro(dep_sel)
+anio_texto = texto_filtro(anio_sel)
+rango_fechas_texto = (
+    f"{texto_valor(f_desde)} a {texto_valor(f_hasta)}"
+    if not es_sin_dato(f_desde) and not es_sin_dato(f_hasta)
+    else "Sin dato"
+)
+rango_dano_texto = (
+    f"{texto_valor(pondf_min)} % a {texto_valor(pondf_max)} %"
+    if not es_sin_dato(pondf_min) and not es_sin_dato(pondf_max)
+    else "Sin dato"
+)
+
+with resumen_filtros.container():
+    st.markdown("**Filtros activos**")
+    rf1, rf2, rf3 = st.columns(3)
+    rf1.caption(f"**Resolución:** {resolucion_texto}")
+    rf2.caption(f"**Origen de datos:** {origen_texto}")
+    rf3.caption(f"**Departamento:** {departamento_texto}")
+    rf4, rf5, rf6 = st.columns(3)
+    rf4.caption(f"**Año:** {anio_texto}")
+    rf5.caption(f"**Rango de fechas:** {rango_fechas_texto}")
+    rf6.caption(f"**Daño ponderado:** {rango_dano_texto}")
 
 
 # WHERE dinamico para reutilizar
