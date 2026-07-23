@@ -542,70 +542,89 @@ if not df_res.empty:
         columns={
             "resolucion": "Resolución / DTO",
             "ddjj": "DDJJ",
-            "nombre": "Nombre",
-            "anio": "Año",
-            "departamentos": "Departamentos",
         }
     ).copy()
-    df_top["Resolución / DTO"] = (
-        df_top["Resolución / DTO"]
-        .fillna("Sin dato")
-        .astype(str)
-        .str.strip()
-        .replace("", "Sin dato")
+    etiquetas_resolucion = df_top["Resolución / DTO"].astype("string").str.strip()
+    etiquetas_sin_dato = etiquetas_resolucion.isna() | etiquetas_resolucion.str.casefold().isin(
+        {"", "none", "nan", "null"}
     )
+    df_top["Resolución / DTO"] = etiquetas_resolucion.mask(
+        etiquetas_sin_dato, "Sin dato"
+    ).astype(str)
     df_top["DDJJ"] = pd.to_numeric(df_top["DDJJ"], errors="coerce").fillna(0)
-    df_top = df_top.sort_values("DDJJ", ascending=False).head(15)
+    df_consolidado_resoluciones = (
+        df_top.groupby("Resolución / DTO", as_index=False, dropna=False)["DDJJ"]
+        .sum()
+    )
+    ddjj_sin_resolucion = int(
+        df_consolidado_resoluciones.loc[
+            df_consolidado_resoluciones["Resolución / DTO"].eq("Sin dato"),
+            "DDJJ",
+        ].sum()
+    )
+    df_top = (
+        df_consolidado_resoluciones.loc[
+            ~df_consolidado_resoluciones["Resolución / DTO"].eq("Sin dato")
+        ]
+        .sort_values("DDJJ", ascending=False)
+        .head(15)
+    )
     df_top = df_top.sort_values("DDJJ", ascending=True)
 
-    columnas_opcionales = [
-        col for col in ["Nombre", "Año", "Departamentos"] if col in df_top.columns
-    ]
-    for column in columnas_opcionales:
-        df_top[column] = df_top[column].map(texto_valor)
+    if not df_top.empty:
+        fig = px.bar(
+            df_top,
+            x="DDJJ",
+            y="Resolución / DTO",
+            orientation="h",
+            text="DDJJ",
+        )
+        fig.update_traces(
+            texttemplate="%{text:,.0f}",
+            textposition="outside",
+            cliponaxis=False,
+        )
+        fig.update_yaxes(type="category", title_text="Resolución / DTO")
+        fig.update_xaxes(title_text="Cantidad de DDJJ")
+        fig.update_layout(
+            title=None,
+            height=max(360, 28 * len(df_top) + 100),
+            showlegend=False,
+            margin=dict(l=120, r=40, t=20, b=40),
+        )
+        fig.update_layout(title_text="")
+        fig.update_layout(
+            annotations=[
+                annotation
+                for annotation in (fig.layout.annotations or ())
+                if str(annotation.text).strip().lower() != "undefined"
+            ]
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No hay resoluciones informadas para los filtros seleccionados.")
 
-    fig = px.bar(
-        df_top,
-        x="DDJJ",
-        y="Resolución / DTO",
-        orientation="h",
-        text="DDJJ",
-    )
-    fig.update_traces(
-        texttemplate="%{text:,.0f}",
-        textposition="outside",
-        cliponaxis=False,
-    )
-    fig.update_yaxes(type="category", title_text="Resolución / DTO")
-    fig.update_xaxes(title_text="Cantidad de DDJJ")
-    fig.update_layout(
-        title=None,
-        height=max(360, 28 * len(df_top) + 100),
-        showlegend=False,
-        margin=dict(l=120, r=40, t=20, b=40),
-    )
-    fig.update_layout(title_text="")
-    fig.update_layout(
-        annotations=[
-            annotation
-            for annotation in (fig.layout.annotations or ())
-            if str(annotation.text).strip().lower() != "undefined"
-        ]
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    st.markdown(f"**DDJJ sin resolución informada:** {ddjj_sin_resolucion:,}")
 
-    columnas_tabla = ["Resolución / DTO", "DDJJ"]
-    columnas_tabla.extend(
-        col for col in ["Año", "Departamentos"] if col in df_top.columns
-    )
-    tabla_resoluciones = (
-        df_top[columnas_tabla]
+    tabla_resoluciones_informadas = (
+        df_top[["Resolución / DTO", "DDJJ"]]
         .sort_values("DDJJ", ascending=False)
         .reset_index(drop=True)
+    )
+    fila_sin_resolucion = pd.DataFrame(
+        [{"Resolución / DTO": "Sin dato", "DDJJ": ddjj_sin_resolucion}]
+    )
+    tabla_resoluciones = pd.concat(
+        [tabla_resoluciones_informadas, fila_sin_resolucion],
+        ignore_index=True,
     )
     tabla_resoluciones["DDJJ"] = tabla_resoluciones["DDJJ"].astype(int)
 
     st.dataframe(tabla_resoluciones, hide_index=True, use_container_width=True)
+    st.caption(
+        "Las DDJJ sin número de resolución informado se reportan como Sin dato y "
+        "se excluyen del ranking principal."
+    )
 else:
     st.info("No hay declaraciones juradas para los filtros seleccionados.")
 
