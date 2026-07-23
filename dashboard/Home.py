@@ -6,6 +6,8 @@ Ejecutar:
 """
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -78,31 +80,162 @@ c5.metric("Adremas", formato_conteo(kpis["adremas"]))
 c6.metric("Daño promedio", formato_porcentaje(kpis["pondf_promedio"]))
 
 # ---------- Filtros globales ----------
-with st.sidebar:
-    st.header("Filtros")
-    resoluciones = list_resoluciones()
-    res_options = ["(todas)"] + [
-        f"{row.id_resolucion} - {row.nombre_resolucion}"
-        for row in resoluciones.itertuples()
-    ]
-    res_sel = st.selectbox("Resolucion", res_options)
-    res_id = None
-    if res_sel != "(todas)":
-        raw_res_id = res_sel.split(" - ", 1)[0]
-        res_id = raw_res_id if is_unified_mode() else int(raw_res_id)
+HOME_FILTER_KEYS = (
+    "home_resolucion",
+    "home_departamentos",
+    "home_anios",
+    "home_origen",
+    "home_origen_actual",
+    "home_periodo",
+    "home_filtrar_pondf",
+    "home_pondf_rango",
+    "filtros",
+)
 
-    origen_sel = "(todos)"
-    if is_unified_mode():
-        origen_sel = st.selectbox("Origen de datos", ["(todos)", "actual", "historico"])
+
+def restablecer_filtros_home() -> None:
+    for key in HOME_FILTER_KEYS:
+        st.session_state.pop(key, None)
+
+
+def texto_resolucion_legible(valor, *, truncar=False) -> str | None:
+    if es_sin_dato(valor):
+        return None
+    texto = " ".join(str(valor).strip().split())
+    compacto = re.sub(r"[-_]", "", texto)
+    if len(compacto) >= 20 and re.fullmatch(r"[0-9a-fA-F]+", compacto):
+        return None
+    if len(texto) > 60:
+        return f"{texto[:57].rstrip()}..." if truncar else None
+    return texto
+
+
+def opciones_resolucion_legibles(
+    resoluciones: pd.DataFrame,
+) -> tuple[list[str], dict[str, object]]:
+    columnas_valor = (
+        "dto",
+        "resolucion",
+        "numero_resolucion",
+        "evento",
+        "nombre_evento",
+        "nombre_resolucion",
+        "descripcion",
+    )
+    columnas_descripcion = (
+        "actividad",
+        "nombre_resolucion",
+        "nombre_evento",
+        "descripcion",
+    )
+    filas = []
+    for _, row in resoluciones.iterrows():
+        etiqueta_base = next(
+            (
+                texto
+                for columna in columnas_valor
+                if columna in resoluciones.columns
+                and (texto := texto_resolucion_legible(row.get(columna)))
+            ),
+            None,
+        )
+        if not etiqueta_base:
+            continue
+
+        descripcion = next(
+            (
+                texto
+                for columna in columnas_descripcion
+                if columna in resoluciones.columns
+                and (texto := texto_resolucion_legible(row.get(columna), truncar=True))
+                and texto != etiqueta_base
+            ),
+            None,
+        )
+
+        anio = None
+        if "anio" in resoluciones.columns:
+            anio_num = pd.to_numeric(row.get("anio"), errors="coerce")
+            if pd.notna(anio_num):
+                anio = int(anio_num)
+        if anio is None and "fec_res" in resoluciones.columns:
+            fecha = pd.to_datetime(row.get("fec_res"), errors="coerce")
+            if pd.notna(fecha):
+                anio = int(fecha.year)
+
+        origen = texto_resolucion_legible(row.get("origen_dato"))
+        filas.append(
+            {
+                "base": etiqueta_base,
+                "descripcion": descripcion,
+                "anio": anio,
+                "origen": origen,
+                "valor_real": row.get("id_resolucion"),
+            }
+        )
+
+    filas.sort(
+        key=lambda item: (
+            item["anio"] is None,
+            -(item["anio"] or 0),
+            item["base"].casefold(),
+        )
+    )
+    repeticiones_base = pd.Series(
+        [item["base"] for item in filas], dtype="string"
+    ).value_counts()
+
+    etiqueta_a_valor: dict[str, object] = {"Todas": None}
+    for item in filas:
+        partes = [item["base"]]
+        if repeticiones_base.get(item["base"], 0) > 1:
+            if item["anio"] is not None:
+                partes.append(str(item["anio"]))
+            if item["descripcion"]:
+                partes.append(item["descripcion"])
+
+        etiqueta = " · ".join(partes)
+        if len(etiqueta) > 60:
+            etiqueta = f"{etiqueta[:57].rstrip()}..."
+        if etiqueta in etiqueta_a_valor and item["origen"]:
+            origen_visible = {
+                "actual": "Actual",
+                "historico": "Histórico",
+            }.get(item["origen"], item["origen"])
+            sufijo = f" · {origen_visible}"
+            etiqueta = f"{etiqueta[:60 - len(sufijo)].rstrip()}{sufijo}"
+
+        etiqueta_original = etiqueta
+        numero_opcion = 2
+        while etiqueta in etiqueta_a_valor:
+            sufijo = f" · {numero_opcion}"
+            etiqueta = f"{etiqueta_original[:60 - len(sufijo)].rstrip()}{sufijo}"
+            numero_opcion += 1
+        etiqueta_a_valor[etiqueta] = item["valor_real"]
+
+    return list(etiqueta_a_valor), etiqueta_a_valor
+
+
+with st.sidebar:
+    st.subheader("Filtros principales")
+    resoluciones = list_resoluciones()
+    res_options, resolucion_valor_real = opciones_resolucion_legibles(resoluciones)
+    if st.session_state.get("home_resolucion") not in res_options:
+        st.session_state.pop("home_resolucion", None)
+    res_sel = st.selectbox("Resolución", res_options, key="home_resolucion")
+    res_id = resolucion_valor_real[res_sel]
+    if res_id is not None and not is_unified_mode():
+        res_id = int(res_id)
 
     deps_df = run_query(
         f"SELECT DISTINCT departamento FROM {ddjj_table} "
         "WHERE departamento <> '' ORDER BY departamento"
     )
-    dep_sel = st.multiselect("Departamento", deps_df["departamento"].tolist())
-
-    pondf_min, pondf_max = st.slider(
-        "% de dano (pondf)", min_value=0, max_value=100, value=(0, 100), step=5
+    dep_sel = st.multiselect(
+        "Departamento",
+        deps_df["departamento"].tolist(),
+        placeholder="Todos",
+        key="home_departamentos",
     )
 
     anios_df = run_query(
@@ -110,29 +243,86 @@ with st.sidebar:
         f"FROM {ddjj_table} {fecha_base_filter} ORDER BY anio DESC"
     )
     anios_list = [int(x) for x in anios_df["anio"].dropna().tolist()]
-    anio_sel = st.multiselect("Anio", anios_list)
-
-    fechas_df = run_query(
-        f"SELECT MIN(fecha) AS mn, MAX(fecha) AS mx "
-        f"FROM {ddjj_table} {fecha_base_filter}"
+    anio_sel = st.multiselect(
+        "Año",
+        anios_list,
+        placeholder="Todos",
+        key="home_anios",
     )
-    fmin = pd.to_datetime(fechas_df.iloc[0]["mn"]).date()
-    fmax = pd.to_datetime(fechas_df.iloc[0]["mx"]).date()
-    rango = st.date_input("Rango de fechas", (fmin, fmax), min_value=fmin, max_value=fmax)
-    if isinstance(rango, tuple) and len(rango) == 2:
-        f_desde, f_hasta = rango
-    else:
-        f_desde, f_hasta = fmin, fmax
+
+    with st.expander("Filtros avanzados", expanded=False):
+        if is_unified_mode():
+            origen_sel = st.selectbox(
+                "Fuente de datos",
+                ["Todos", "actual", "historico"],
+                format_func=lambda valor: {
+                    "Todos": "Todos",
+                    "actual": "Actual",
+                    "historico": "Histórico",
+                }[valor],
+                key="home_origen",
+            )
+        else:
+            origen_sel = st.selectbox(
+                "Fuente de datos",
+                ["actual"],
+                format_func=lambda _valor: "Actual",
+                disabled=True,
+                key="home_origen_actual",
+            )
+
+        fechas_df = run_query(
+            f"SELECT MIN(fecha) AS mn, MAX(fecha) AS mx "
+            f"FROM {ddjj_table} {fecha_base_filter}"
+        )
+        fmin = pd.to_datetime(fechas_df.iloc[0]["mn"]).date()
+        fmax = pd.to_datetime(fechas_df.iloc[0]["mx"]).date()
+        rango = st.date_input(
+            "Período",
+            (fmin, fmax),
+            min_value=fmin,
+            max_value=fmax,
+            key="home_periodo",
+        )
+        if isinstance(rango, tuple) and len(rango) == 2:
+            f_desde, f_hasta = rango
+        else:
+            f_desde, f_hasta = fmin, fmax
+
+        filtrar_pondf = st.checkbox(
+            "Filtrar por daño ponderado",
+            value=False,
+            key="home_filtrar_pondf",
+        )
+        pondf_min = pondf_max = None
+        if filtrar_pondf:
+            pondf_min, pondf_max = st.slider(
+                "Daño ponderado (%)",
+                min_value=0,
+                max_value=100,
+                value=(0, 100),
+                step=5,
+                key="home_pondf_rango",
+            )
+
+    st.button(
+        "Restablecer filtros",
+        on_click=restablecer_filtros_home,
+        use_container_width=True,
+    )
 
     st.session_state["filtros"] = {
         "id_resolucion": res_id,
         "departamentos": dep_sel,
         "anios": anio_sel,
+        "filtrar_pondf": filtrar_pondf,
         "pondf_min": pondf_min,
         "pondf_max": pondf_max,
         "f_desde": str(f_desde),
         "f_hasta": str(f_hasta),
-        "origen_dato": None if origen_sel == "(todos)" else origen_sel,
+        "origen_dato": (
+            None if not is_unified_mode() or origen_sel == "Todos" else origen_sel
+        ),
     }
 
 
@@ -149,8 +339,12 @@ def texto_filtro(valor, marcadores_todos=()) -> str:
     return str(valor)
 
 
-resolucion_texto = texto_filtro(res_sel, {"(todas)"})
-origen_texto = texto_filtro(origen_sel, {"(todos)"})
+resolucion_texto = texto_filtro(res_sel, {"Todas"})
+origen_texto = {
+    "Todos": "Todos",
+    "actual": "Actual",
+    "historico": "Histórico",
+}.get(origen_sel, texto_filtro(origen_sel))
 departamento_texto = texto_filtro(dep_sel)
 anio_texto = texto_filtro(anio_sel)
 rango_fechas_texto = (
@@ -158,21 +352,23 @@ rango_fechas_texto = (
     if not es_sin_dato(f_desde) and not es_sin_dato(f_hasta)
     else "Sin dato"
 )
-rango_dano_texto = (
-    f"{texto_valor(pondf_min)} % a {texto_valor(pondf_max)} %"
-    if not es_sin_dato(pondf_min) and not es_sin_dato(pondf_max)
-    else "Sin dato"
-)
+rango_dano_texto = "No aplicado"
+if filtrar_pondf:
+    rango_dano_texto = (
+        f"{texto_valor(pondf_min)} % a {texto_valor(pondf_max)} %"
+        if not es_sin_dato(pondf_min) and not es_sin_dato(pondf_max)
+        else "Sin dato"
+    )
 
 with resumen_filtros.container():
     st.markdown("**Filtros activos**")
     rf1, rf2, rf3 = st.columns(3)
     rf1.caption(f"**Resolución:** {resolucion_texto}")
-    rf2.caption(f"**Origen de datos:** {origen_texto}")
+    rf2.caption(f"**Fuente de datos:** {origen_texto}")
     rf3.caption(f"**Departamento:** {departamento_texto}")
     rf4, rf5, rf6 = st.columns(3)
     rf4.caption(f"**Año:** {anio_texto}")
-    rf5.caption(f"**Rango de fechas:** {rango_fechas_texto}")
+    rf5.caption(f"**Período:** {rango_fechas_texto}")
     rf6.caption(f"**Daño ponderado:** {rango_dano_texto}")
 
 
@@ -212,9 +408,10 @@ def where_filtros(prefix="dj.") -> tuple[str, dict]:
     if is_unified_mode() and f.get("origen_dato"):
         conds.append(f"{prefix}origen_dato = :origen_dato")
         params["origen_dato"] = f["origen_dato"]
-    conds.append(f"{prefix}pondf BETWEEN :p_min AND :p_max")
-    params["p_min"] = f["pondf_min"]
-    params["p_max"] = f["pondf_max"]
+    if f.get("filtrar_pondf"):
+        conds.append(f"{prefix}pondf BETWEEN :p_min AND :p_max")
+        params["p_min"] = f["pondf_min"]
+        params["p_max"] = f["pondf_max"]
     return " AND ".join(conds), params
 
 
