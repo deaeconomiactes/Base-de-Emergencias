@@ -221,7 +221,7 @@ def where_filtros(prefix="dj.") -> tuple[str, dict]:
 where_sql, params = where_filtros()
 
 # ---------- Evolucion anual de DDJJ ----------
-st.subheader("Evolución de DDJJ por año")
+st.subheader("Evolución anual de DDJJ")
 df_evolucion = run_query(
     f"""
     SELECT YEAR(dj.fecha) AS anio, COUNT(*) AS ddjj
@@ -291,10 +291,11 @@ if not df_evolucion.empty:
             st.dataframe(tabla_evolucion, hide_index=True, use_container_width=True)
 
         st.caption(
-            "La evolución anual se calcula con el campo temporal disponible "
-            "actualmente. Los años sin registros se muestran en cero dentro del "
-            "conjunto filtrado. La cobertura histórica puede depender de la "
-            "disponibilidad de fecha, año informado y filtros activos."
+            "La serie anual se calcula con el campo fecha disponible y los filtros "
+            "activos. Los años con cero indican ausencia de registros en el conjunto "
+            "filtrado, no necesariamente ausencia comprobada de emergencias. La "
+            "cobertura histórica puede depender de la disponibilidad de fecha, año "
+            "informado y daño ponderado."
         )
         if registros_sin_anio:
             st.caption(
