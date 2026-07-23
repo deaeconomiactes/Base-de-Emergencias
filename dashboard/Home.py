@@ -71,6 +71,10 @@ def formato_porcentaje(valor) -> str:
     return "Sin dato" if es_sin_dato(valor) else f"{valor:.1f}%"
 
 
+def altura_tabla(cantidad_filas: int, maximo: int = 300) -> int:
+    return min(max(140, 35 * (cantidad_filas + 1)), maximo)
+
+
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Productores", formato_conteo(kpis["productores"]))
 c2.metric("DDJJ", formato_conteo(kpis["ddjj"]))
@@ -484,9 +488,6 @@ if not df_evolucion.empty:
         tabla_evolucion["DDJJ"] = tabla_evolucion["DDJJ"].map(
             lambda valor: f"{valor:,}"
         )
-        with st.expander("Ver tabla de evolución anual"):
-            st.dataframe(tabla_evolucion, hide_index=True, use_container_width=True)
-
         st.caption(
             "La serie anual se calcula con el campo fecha disponible y los filtros "
             "activos. Los años con cero indican ausencia de registros en el conjunto "
@@ -497,6 +498,13 @@ if not df_evolucion.empty:
         if registros_sin_anio:
             st.caption(
                 f"Registros sin año disponible: {registros_sin_anio:,}."
+            )
+        with st.expander("Ver tabla de evolución anual", expanded=False):
+            st.dataframe(
+                tabla_evolucion,
+                hide_index=True,
+                use_container_width=True,
+                height=altura_tabla(len(tabla_evolucion)),
             )
     else:
         st.info("No hay datos temporales para los filtros seleccionados.")
@@ -620,11 +628,17 @@ if not df_res.empty:
     )
     tabla_resoluciones["DDJJ"] = tabla_resoluciones["DDJJ"].astype(int)
 
-    st.dataframe(tabla_resoluciones, hide_index=True, use_container_width=True)
     st.caption(
         "Las DDJJ sin número de resolución informado se reportan como Sin dato y "
         "se excluyen del ranking principal."
     )
+    with st.expander("Ver tabla de resoluciones", expanded=False):
+        st.dataframe(
+            tabla_resoluciones,
+            hide_index=True,
+            use_container_width=True,
+            height=altura_tabla(len(tabla_resoluciones)),
+        )
 else:
     st.info("No hay declaraciones juradas para los filtros seleccionados.")
 
@@ -707,11 +721,12 @@ with left:
         tabla_departamentos_mostrar["DDJJ"] = tabla_departamentos_mostrar[
             "DDJJ"
         ].map(lambda valor: f"{valor:,}")
-        with st.expander("Ver tabla de departamentos"):
+        with st.expander("Ver tabla de departamentos", expanded=False):
             st.dataframe(
                 tabla_departamentos_mostrar,
                 hide_index=True,
                 use_container_width=True,
+                height=altura_tabla(len(tabla_departamentos_mostrar), maximo=280),
             )
     else:
         st.info("No hay departamentos para los filtros seleccionados.")
@@ -797,17 +812,18 @@ with right:
         tabla_dano_mostrar["Participación"] = tabla_dano_mostrar[
             "Participación"
         ].map(lambda valor: f"{valor:.1f}%")
-        with st.expander("Ver tabla de tramos de daño"):
-            st.dataframe(
-                tabla_dano_mostrar,
-                hide_index=True,
-                use_container_width=True,
-            )
         st.caption(
             "El daño ponderado se agrupa en tramos. Los registros sin porcentaje "
             "informado se clasifican como Sin dato cuando no son excluidos por "
             "filtros activos."
         )
+        with st.expander("Ver tabla de tramos de daño", expanded=False):
+            st.dataframe(
+                tabla_dano_mostrar,
+                hide_index=True,
+                use_container_width=True,
+                height=altura_tabla(len(tabla_dano_mostrar), maximo=260),
+            )
     else:
         st.info("No hay datos de daño para los filtros seleccionados.")
 
