@@ -6,7 +6,11 @@ dashboard/.streamlit/secrets.toml
 data_raw/
 data_clean/
 data_intermediate/
+data_processed/
 *.xlsx
+*.xls
+*.csv
+!config/*.csv
 
 # Dumps de la base (pueden ser pesados o sensibles)
 *.sql
