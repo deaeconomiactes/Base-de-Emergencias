@@ -79,7 +79,16 @@ with st.container():
     with c4:
         origen_sel = "(todos)"
         if unified:
-            origen_sel = st.selectbox("Origen de datos", ["(todos)", "actual", "historico"])
+            origen_sel = st.selectbox(
+                "Origen de datos",
+                ["(todos)", "actual", "historico", "ddjj_2023_excel"],
+                format_func=lambda value: {
+                    "(todos)": "Todos",
+                    "actual": "Actual",
+                    "historico": "Histórico",
+                    "ddjj_2023_excel": "DDJJ 2023 Excel",
+                }[value],
+            )
 
 metric_order = st.segmented_control(
     "Ordenar cultivos por",
@@ -129,6 +138,13 @@ if unified and origen_sel != "(todos)":
 
 where_unified = " AND ".join(filters_unified)
 where_actual = " AND ".join(filters_actual)
+
+if unified and origen_sel == "ddjj_2023_excel":
+    st.warning(
+        "DDJJ 2023 Excel: las superficies negativas y los registros con "
+        "mortandad mayor que existencias se conservan para trazabilidad, pero "
+        "sus medidas cuantitativas inválidas quedan excluidas de estas sumas."
+    )
 
 # ---------- Cultivos: hectareas afectadas vs sembradas ----------
 st.subheader("Cultivos - superficie sembrada vs afectada")
@@ -375,12 +391,17 @@ else:
 
 # ---------- Top mejoras perdidas ----------
 st.subheader("Mejoras afectadas declaradas")
+if unified:
+    st.caption(
+        "Bloque auxiliar disponible solo para la fuente operativa actual; "
+        "no se imputa información faltante a DDJJ 2023 ni a históricos."
+    )
 metrica_mejoras = st.selectbox(
     "Ordenar mejoras por",
     ["DDJJ con mejora afectada", "Valor total declarado", "Incidencia promedio"],
 )
 
-if unified and origen_sel == "historico":
+if unified and origen_sel in {"historico", "ddjj_2023_excel"}:
     df_mejoras = pd.DataFrame()
 else:
     filters_mejoras = ["1=1"]
@@ -520,18 +541,42 @@ treemap_mode = st.selectbox(
     "Vista de tipo juridico",
     ["Top combinaciones", "Todas las categorias", "Excluir categoria dominante"],
 )
-df_tj = run_query(
-    """
-    SELECT COALESCE(tj.TipoJuridicoDesc,'(s/d)') AS tipo_juridico,
-           COALESCE(ta.TipoActividadDesc,'(s/d)') AS actividad,
-           COUNT(*) AS n
-    FROM productores p
-    LEFT JOIN tipojuridico   tj ON tj.TipoJuridicoId   = p.TipoJuridicoId
-    LEFT JOIN tipoactividad  ta ON ta.TipoActividadId  = p.EsPrincipalActividadEconomica
-    GROUP BY tipo_juridico, actividad
-    ORDER BY n DESC
-    """
-)
+if unified:
+    tj_filters = ["1=1"]
+    tj_params: dict = {}
+    if origen_sel != "(todos)":
+        tj_filters.append("p.origen_dato=:tj_origin")
+        tj_params["tj_origin"] = origen_sel
+    if anio_sel != "(todos)":
+        tj_filters.append(
+            "EXISTS (SELECT 1 FROM vw_all_ddjj_personas d "
+            "WHERE d.productor_all_id=p.productor_all_id AND d.anio=:tj_anio)"
+        )
+        tj_params["tj_anio"] = int(anio_sel)
+    df_tj = run_query(
+        f"""
+        SELECT '(no disponible en vista unificada)' AS tipo_juridico,
+               COALESCE(p.actividad,'(s/d)') AS actividad,
+               COUNT(DISTINCT p.productor_all_id) AS n
+        FROM vw_all_productores p
+        WHERE {' AND '.join(tj_filters)}
+        GROUP BY COALESCE(p.actividad,'(s/d)') ORDER BY n DESC
+        """,
+        tj_params,
+    )
+    st.caption("Tipo jurídico no está homologado para todas las fuentes; se conserva la distribución por actividad.")
+else:
+    df_tj = run_query(
+        """
+        SELECT COALESCE(tj.TipoJuridicoDesc,'(s/d)') AS tipo_juridico,
+               COALESCE(ta.TipoActividadDesc,'(s/d)') AS actividad,
+               COUNT(*) AS n
+        FROM productores p
+        LEFT JOIN tipojuridico tj ON tj.TipoJuridicoId=p.TipoJuridicoId
+        LEFT JOIN tipoactividad ta ON ta.TipoActividadId=p.EsPrincipalActividadEconomica
+        GROUP BY tipo_juridico, actividad ORDER BY n DESC
+        """
+    )
 if not df_tj.empty:
     plot_tj = df_tj.copy()
     if treemap_mode == "Top combinaciones":

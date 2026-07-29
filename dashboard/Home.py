@@ -256,14 +256,16 @@ with st.sidebar:
 
     with st.expander("Filtros avanzados", expanded=False):
         if is_unified_mode():
+            origen_labels = {
+                "Todos": "Todos",
+                "actual": "Actual",
+                "historico": "Histórico",
+                "ddjj_2023_excel": "DDJJ 2023 Excel",
+            }
             origen_sel = st.selectbox(
                 "Fuente de datos",
-                ["Todos", "actual", "historico"],
-                format_func=lambda valor: {
-                    "Todos": "Todos",
-                    "actual": "Actual",
-                    "historico": "Histórico",
-                }[valor],
+                list(origen_labels),
+                format_func=origen_labels.get,
                 key="home_origen",
             )
         else:
@@ -348,6 +350,7 @@ origen_texto = {
     "Todos": "Todos",
     "actual": "Actual",
     "historico": "Histórico",
+    "ddjj_2023_excel": "DDJJ 2023 Excel",
 }.get(origen_sel, texto_filtro(origen_sel))
 departamento_texto = texto_filtro(dep_sel)
 anio_texto = texto_filtro(anio_sel)
@@ -389,7 +392,7 @@ def where_filtros(prefix="dj.") -> tuple[str, dict]:
                 "WHERE rf.resolucion_all_id = :id_res "
                 f"AND rf.origen_dato = {prefix}origen_dato "
                 f"AND ((rf.origen_dato = 'actual' AND rf.id_resolucion_actual = {prefix}id_resolucion_actual) "
-                f"OR (rf.origen_dato = 'historico' AND rf.evento_id = {prefix}evento_id))"
+                f"OR (rf.origen_dato <> 'actual' AND rf.evento_id = {prefix}evento_id))"
                 ")"
             )
         else:
@@ -535,9 +538,9 @@ if is_unified_mode():
                COUNT(*) AS ddjj
         FROM {ddjj_table} dj
         JOIN {res_table} r
-          ON r.origen_dato = dj.origen_dato
+         ON r.origen_dato = dj.origen_dato
          AND ((r.origen_dato = 'actual' AND r.id_resolucion_actual = dj.id_resolucion_actual)
-              OR (r.origen_dato = 'historico' AND r.evento_id = dj.evento_id))
+              OR (r.origen_dato <> 'actual' AND r.evento_id = dj.evento_id))
         WHERE {where_sql}
         GROUP BY r.numero_resolucion, r.nombre_resolucion
         ORDER BY ddjj DESC

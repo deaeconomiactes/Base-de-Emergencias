@@ -1,135 +1,141 @@
-"""Listado y búsqueda de productores."""
+"""Listado unificado y búsqueda de productores."""
 from __future__ import annotations
 
 import streamlit as st
 
-from utils import list_actividades, run_query
+from utils import is_unified_mode, run_query
 
 st.set_page_config(page_title="Productores", layout="wide")
 st.title("Productores")
 
+unified = is_unified_mode()
+
 with st.sidebar:
-    st.header("Búsqueda")
+    st.header("Filtros")
     q = st.text_input("Nombre / CUIT / Documento", "")
-    actividades = list_actividades()
-    act_sel = st.multiselect(
-        "Actividad principal",
-        actividades["descripcion"].tolist(),
-    )
-    limite = st.slider("Filas máximas", 50, 2000, 200, step=50)
-
-conds = []
-params: dict = {"limite": limite}
-if q:
-    conds.append(
-        "(p.ProductorDenominacion LIKE :q OR p.CUITCUIL LIKE :q "
-        "OR p.DocumentoNro LIKE :q OR EXISTS ("
-        "SELECT 1 FROM ddjj_personas djq "
-        "WHERE djq.id_productor = p.ProductorId "
-        "AND (djq.nombre LIKE :q OR CAST(djq.cuit AS CHAR) LIKE :q "
-        "OR CAST(djq.num_doc AS CHAR) LIKE :q)"
-        "))"
-    )
-    params["q"] = f"%{q}%"
-if act_sel:
-    placeholders = []
-    for i, a in enumerate(act_sel):
-        k = f"a{i}"
-        placeholders.append(f":{k}")
-        params[k] = a
-    conds.append(f"ta.TipoActividadDesc IN ({','.join(placeholders)})")
-
-where = ("WHERE " + " AND ".join(conds)) if conds else ""
-
-sql = f"""
-SELECT
-    p.ProductorId         AS id,
-    p.ProductorDenominacion AS productor,
-    p.CUITCUIL            AS cuit,
-    td.TipoDocumentoDescripcion AS tipo_doc,
-    p.DocumentoNro        AS documento,
-    p.Sexo                AS sexo,
-    ta.TipoActividadDesc  AS actividad,
-    tj.TipoJuridicoDesc   AS tipo_juridico,
-    pr.ProvinciaDesc      AS provincia,
-    dep.DepartamentoDesc  AS departamento,
-    loc.LocalidadDesc     AS localidad,
-    p.renspa              AS renspa,
-    (SELECT COUNT(*) FROM ddjj_personas dj WHERE dj.id_productor=p.ProductorId) AS ddjj
-FROM productores p
-LEFT JOIN tipodocumento td  ON td.TipoDocumentoId = p.TipoDocumentoId
-LEFT JOIN tipoactividad ta  ON ta.TipoActividadId = p.EsPrincipalActividadEconomica
-LEFT JOIN tipojuridico tj   ON tj.TipoJuridicoId = p.TipoJuridicoId
-LEFT JOIN domicilios d      ON d.DomicilioId = p.DomicilioId
-LEFT JOIN provincias pr     ON pr.ProvinciaId = d.ProvinciaId
-LEFT JOIN departamentos dep ON dep.DepartamentoId = d.DepartamentoId
-LEFT JOIN localidades loc   ON loc.LocalidadId = d.LocalidadId
-{where}
-ORDER BY p.ProductorDenominacion
-LIMIT :limite
-"""
-
-df = run_query(sql, params)
-st.caption(f"Mostrando **{len(df)}** productores (límite {limite}).")
-st.dataframe(df, use_container_width=True, hide_index=True, height=620)
-
-if not df.empty:
-    active_filter = bool(q or act_sel)
-    if active_filter:
-        ids = df["id"].dropna().astype(int).tolist()
-        id_params = {f"pid{i}": pid for i, pid in enumerate(ids)}
-        id_placeholders = ",".join(f":pid{i}" for i in range(len(ids)))
-        registros = run_query(
-            f"""
-            SELECT
-                p.ProductorId AS productor_id,
-                p.ProductorDenominacion AS productor,
-                dj.id_ddjj,
-                dj.nombre AS nombre_en_ddjj,
-                dj.fecha,
-                r.numero_resolucion AS decreto,
-                r.nombre_resolucion AS descripcion_decreto,
-                dj.departamento,
-                dj.localidad,
-                dj.paraje,
-                dj.pondf,
-                dj.estado
-            FROM ddjj_personas dj
-            LEFT JOIN productores p ON p.ProductorId = dj.id_productor
-            LEFT JOIN resoluciones r ON r.id_resolucion = dj.id_resolucion
-            WHERE dj.id_productor IN ({id_placeholders})
-            ORDER BY p.ProductorDenominacion, dj.fecha DESC, dj.id_ddjj DESC
-            """,
-            id_params,
+    if unified:
+        anios_df = run_query(
+            "SELECT DISTINCT anio FROM vw_all_ddjj_personas "
+            "WHERE anio IS NOT NULL ORDER BY anio DESC"
         )
-        st.subheader("Registros cargados para los productores filtrados")
-        st.caption(f"Mostrando **{len(registros)}** DDJJ asociadas a la busqueda.")
-        st.dataframe(registros, use_container_width=True, hide_index=True, height=360)
+        anio_sel = st.selectbox(
+            "Año", ["(todos)"] + anios_df["anio"].astype(int).tolist()
+        )
+        origen_sel = st.selectbox(
+            "Origen de datos",
+            ["(todos)", "actual", "historico", "ddjj_2023_excel"],
+            format_func=lambda value: {
+                "(todos)": "Todos",
+                "actual": "Actual",
+                "historico": "Histórico",
+                "ddjj_2023_excel": "DDJJ 2023 Excel",
+            }[value],
+        )
+        norma_sel = st.selectbox(
+            "Norma / evento", ["(todas)", "Decreto 2099/23"]
+        )
+    else:
+        anio_sel, origen_sel, norma_sel = "(todos)", "actual", "(todas)"
+    limite = st.slider("Filas máximas", 50, 3000, 500, step=50)
 
-    sel = st.selectbox(
+if unified:
+    conds = ["1=1"]
+    params: dict = {"limite": limite}
+    if q:
+        conds.append(
+            "(p.productor_nombre LIKE :q OR p.cuit_cuil LIKE :q "
+            "OR p.documento_nro LIKE :q)"
+        )
+        params["q"] = f"%{q}%"
+    if origen_sel != "(todos)":
+        conds.append("p.origen_dato = :origen")
+        params["origen"] = origen_sel
+    ddjj_conds = ["d.productor_all_id = p.productor_all_id"]
+    if anio_sel != "(todos)":
+        ddjj_conds.append("d.anio = :anio")
+        params["anio"] = int(anio_sel)
+    if norma_sel != "(todas)":
+        ddjj_conds.append("d.dto = :norma")
+        params["norma"] = norma_sel
+    if origen_sel != "(todos)":
+        ddjj_conds.append("d.origen_dato = :origen")
+    if anio_sel != "(todos)" or norma_sel != "(todas)":
+        conds.append(
+            "EXISTS (SELECT 1 FROM vw_all_ddjj_personas d WHERE "
+            + " AND ".join(ddjj_conds)
+            + ")"
+        )
+    where = " AND ".join(conds)
+    df = run_query(
+        f"""
+        SELECT p.productor_all_id AS productor_id, p.productor_nombre AS productor,
+               p.cuit_cuil, p.documento_nro, p.actividad, p.departamento,
+               p.localidad, p.renspa, p.origen_dato,
+               COUNT(DISTINCT d.ddjj_all_id) AS ddjj,
+               GROUP_CONCAT(DISTINCT d.dto ORDER BY d.dto SEPARATOR '; ') AS normativa
+        FROM vw_all_productores p
+        LEFT JOIN vw_all_ddjj_personas d
+          ON d.productor_all_id = p.productor_all_id
+         {"AND d.anio = :anio" if anio_sel != "(todos)" else ""}
+         {"AND d.dto = :norma" if norma_sel != "(todas)" else ""}
+         {"AND d.origen_dato = :origen" if origen_sel != "(todos)" else ""}
+        WHERE {where}
+        GROUP BY p.productor_all_id, p.productor_nombre, p.cuit_cuil,
+                 p.documento_nro, p.actividad, p.departamento, p.localidad,
+                 p.renspa, p.origen_dato
+        ORDER BY p.productor_nombre
+        LIMIT :limite
+        """,
+        params,
+    )
+else:
+    params = {"limite": limite, "q": f"%{q}%"}
+    df = run_query(
+        """
+        SELECT CAST(p.ProductorId AS CHAR) AS productor_id,
+               p.ProductorDenominacion AS productor, p.CUITCUIL AS cuit_cuil,
+               p.DocumentoNro AS documento_nro, ta.TipoActividadDesc AS actividad,
+               dep.DepartamentoDesc AS departamento, loc.LocalidadDesc AS localidad,
+               p.renspa, 'actual' AS origen_dato,
+               COUNT(DISTINCT dj.id_ddjj) AS ddjj, NULL AS normativa
+        FROM productores p
+        LEFT JOIN tipoactividad ta ON ta.TipoActividadId=p.EsPrincipalActividadEconomica
+        LEFT JOIN domicilios dom ON dom.DomicilioId=p.DomicilioId
+        LEFT JOIN departamentos dep ON dep.DepartamentoId=dom.DepartamentoId
+        LEFT JOIN localidades loc ON loc.LocalidadId=dom.LocalidadId
+        LEFT JOIN ddjj_personas dj ON dj.id_productor=p.ProductorId
+        WHERE (:q = '%%' OR p.ProductorDenominacion LIKE :q
+               OR p.CUITCUIL LIKE :q OR p.DocumentoNro LIKE :q)
+        GROUP BY p.ProductorId, p.ProductorDenominacion, p.CUITCUIL,
+                 p.DocumentoNro, ta.TipoActividadDesc, dep.DepartamentoDesc,
+                 loc.LocalidadDesc, p.renspa
+        ORDER BY p.ProductorDenominacion LIMIT :limite
+        """,
+        params,
+    )
+
+st.caption(f"Mostrando **{len(df):,}** productores sin multiplicarlos por sus detalles.")
+st.dataframe(df, use_container_width=True, hide_index=True, height=590)
+
+if unified and not df.empty:
+    selected = st.selectbox(
         "Ver DDJJ de un productor",
-        [""] + df["id"].astype(str).tolist(),
-        format_func=lambda x: (
-            "" if not x
-            else f"#{x} — {df.set_index('id').loc[int(x), 'productor']}"
+        df["productor_id"].astype(str).tolist(),
+        format_func=lambda value: str(
+            df.loc[df["productor_id"].astype(str).eq(value), "productor"].iloc[0]
         ),
     )
-    if sel:
-        pid = int(sel)
-        st.subheader("DDJJ de este productor")
-        ddjj = run_query(
-            """
-            SELECT dj.id_ddjj, dj.fecha, r.numero_resolucion, dj.pondf,
-                   dj.departamento, dj.localidad, dj.cargado, dj.estado
-            FROM ddjj_personas dj
-            LEFT JOIN resoluciones r ON r.id_resolucion = dj.id_resolucion
-            WHERE dj.id_productor = :pid
-            ORDER BY dj.fecha DESC
-            """,
-            {"pid": pid},
-        )
-        st.dataframe(ddjj, use_container_width=True, hide_index=True)
-        st.info(
-            "Copiar un `id_ddjj` y pegarlo en la página **Detalle DDJJ** "
-            "para ver el detalle completo."
-        )
+    ddjj = run_query(
+        """
+        SELECT ddjj_all_id, ddjj_hist_id AS tramite_id, fecha, anio,
+               dto AS norma_evento, departamento, localidad, actividad,
+               origen_dato
+        FROM vw_all_ddjj_personas
+        WHERE productor_all_id=:productor_id
+        ORDER BY fecha DESC, ddjj_all_id
+        """,
+        {"productor_id": selected},
+    )
+    st.subheader("DDJJ asociadas")
+    st.dataframe(ddjj, use_container_width=True, hide_index=True)
+    st.info("Use `ddjj_all_id` o `tramite_id` en la página Detalle DDJJ.")

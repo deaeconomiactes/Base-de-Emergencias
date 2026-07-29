@@ -643,11 +643,12 @@ def _query_ganaderia(productor_ids: list[str]) -> pd.DataFrame:
     )
 
 
-def _query_adremas(id_productor_actual) -> pd.DataFrame:
-    if pd.isna(id_productor_actual):
-        return pd.DataFrame()
-    return run_query(
-        """
+def _query_adremas(id_productor_actual, ddjj: pd.DataFrame) -> pd.DataFrame:
+    """Combina ADREMAS actuales y pares únicos de DDJJ 2023."""
+    frames: list[pd.DataFrame] = []
+    if not pd.isna(id_productor_actual):
+        current = run_query(
+            """
         SELECT
             a.adrema,
             a.superficie,
@@ -658,7 +659,11 @@ def _query_adremas(id_productor_actual) -> pd.DataFrame:
             e.paraje_estab,
             e.latitud,
             e.longitud,
-            a.ddjj AS id_ddjj
+            a.ddjj AS id_ddjj,
+            'actual' AS origen_dato,
+            NULL AS municipio,
+            NULL AS localidad,
+            NULL AS source_row_number
         FROM adremas a
         LEFT JOIN tipoactividad ta ON ta.TipoActividadId = a.actividad
         LEFT JOIN tipotenencia tt ON tt.id = a.tenencia
@@ -666,9 +671,37 @@ def _query_adremas(id_productor_actual) -> pd.DataFrame:
         JOIN ddjj_personas dj ON dj.id_ddjj = a.ddjj
         WHERE dj.id_productor = :id_productor
         ORDER BY a.superficie DESC
-        """,
-        {"id_productor": int(id_productor_actual)},
-    )
+            """,
+            {"id_productor": int(id_productor_actual)},
+        )
+        frames.append(current)
+
+    if not ddjj.empty and {"origen_dato", "ddjj_hist_id"}.issubset(ddjj.columns):
+        tramite_ids = (
+            ddjj.loc[ddjj["origen_dato"].eq("ddjj_2023_excel"), "ddjj_hist_id"]
+            .dropna().astype(str).unique().tolist()
+        )
+        if tramite_ids:
+            placeholders, params = _id_params(tramite_ids)
+            frames.append(
+                run_query(
+                    f"""
+                    SELECT adrema, superficie,
+                           COALESCE(actividad_normalizada_preliminar, actividad_original) AS actividad,
+                           pertenencia AS tenencia, departamento,
+                           NULL AS nombre_estab, paraje AS paraje_estab,
+                           NULL AS latitud, NULL AS longitud,
+                           tramite_id AS id_ddjj, origen_dato, municipio, localidad,
+                           source_row_number
+                    FROM stg_ddjj_2023_adrema
+                    WHERE adrema_unica_indicador=1
+                      AND tramite_id IN ({placeholders})
+                    ORDER BY superficie DESC
+                    """,
+                    params,
+                )
+            )
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def _query_documentacion(id_productor_actual) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -801,7 +834,7 @@ ddjj = _query_ddjj(productor_ids)
 ddjj_unique = _deduplicate_ddjj(ddjj)
 agricultura = _query_agricultura(productor_ids)
 ganaderia = _query_ganaderia(productor_ids)
-adremas = _query_adremas(id_productor_actual)
+adremas = _query_adremas(id_productor_actual, ddjj)
 ponderaciones, mejoras, documentacion = _query_documentacion(id_productor_actual)
 
 st.divider()
@@ -1081,14 +1114,10 @@ with tab_geo:
         "La vinculación de adremas/establecimientos se muestra solo cuando existe "
         "clave confiable en datos actuales."
     )
-    if pd.isna(id_productor_actual):
-        st.info("Este productor no tiene identificador operativo actual; no se consultan adremas ni establecimientos.")
-    elif adremas.empty:
-        st.info("No hay adremas o establecimientos asociados en las tablas actuales.")
+    if adremas.empty:
+        st.info("No hay adremas o establecimientos asociados para este productor.")
     else:
         adremas_view = adremas.copy()
-        adremas_view["origen_dato"] = "actual"
-        adremas_view["localidad"] = pd.NA
         adremas_labels = {
             "adrema": DISPLAY_LABELS["adrema"],
             "nombre_estab": DISPLAY_LABELS["nombre_estab"],

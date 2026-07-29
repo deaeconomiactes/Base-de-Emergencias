@@ -1,191 +1,109 @@
-"""Detalle completo de una DDJJ (productor + rubros + adjuntos)."""
+"""Detalle trazable de una declaración en el registro unificado."""
 from __future__ import annotations
 
-import pandas as pd
 import streamlit as st
 
-from utils import run_query
+from utils import is_unified_mode, run_query
 
 st.set_page_config(page_title="Detalle DDJJ", layout="wide")
 st.title("Detalle de una DDJJ")
 
-ddjj_id = st.number_input(
-    "Número de DDJJ (id_ddjj)", min_value=1, step=1, value=59
-)
+if not is_unified_mode():
+    st.warning("Esta página requiere `DATA_MODE=unificado` para incluir DDJJ 2023 Excel.")
+
+identifier = st.text_input(
+    "Identificador (ddjj_all_id, tramite_id o id_ddjj actual)", value=""
+).strip()
+if not identifier:
+    st.info("Ingrese un identificador. Los trámites 2023 pueden buscarse por `tramite_id`.")
+    st.stop()
 
 cab = run_query(
     """
-    SELECT dj.id_ddjj, dj.fecha, dj.pondf, dj.cargado, dj.estado,
-           p.ProductorDenominacion AS productor, p.CUITCUIL, p.DocumentoNro,
-           r.nombre_resolucion, r.numero_resolucion, r.fec_res,
-           dj.provincia, dj.departamento, dj.localidad, dj.paraje
-    FROM ddjj_personas dj
-    LEFT JOIN productores  p ON p.ProductorId   = dj.id_productor
-    LEFT JOIN resoluciones r ON r.id_resolucion = dj.id_resolucion
-    WHERE dj.id_ddjj = :id
+    SELECT ddjj_all_id, id_ddjj_actual, ddjj_hist_id AS tramite_id,
+           productor_all_id, productor_nombre, cuit_cuil, documento_nro,
+           fecha, anio, evento_id, dto AS norma_evento, periodo,
+           departamento, localidad, paraje, actividad, pondf,
+           superficie_total, source_file, source_sheet, origen_dato,
+           flag_revision_manual, severidad_maxima
+    FROM vw_all_ddjj_personas
+    WHERE ddjj_all_id=:identifier OR ddjj_hist_id=:identifier
+       OR iddj=:identifier OR codigo=:identifier OR solicitud_id=:identifier
+       OR CAST(id_ddjj_actual AS CHAR)=:identifier
+    ORDER BY CASE WHEN ddjj_all_id=:identifier THEN 0 ELSE 1 END
+    LIMIT 2
     """,
-    {"id": int(ddjj_id)},
+    {"identifier": identifier},
 )
-
 if cab.empty:
-    st.warning("No existe esa DDJJ.")
+    st.warning("No existe una DDJJ con ese identificador en el registro unificado.")
     st.stop()
-
+if len(cab) > 1:
+    st.warning("El identificador coincide con más de un origen; use `ddjj_all_id`.")
 row = cab.iloc[0]
+
 c1, c2, c3 = st.columns([2, 2, 1])
-c1.markdown(f"### {row['productor'] or 's/d'}")
-c1.write(
-    f"**CUIT:** {row['CUITCUIL'] or '—'}  ·  **Doc:** {row['DocumentoNro'] or '—'}"
-)
-c2.write(
-    f"**Resolución:** {row['nombre_resolucion'] or '—'}  \n"
-    f"**Número:** {row['numero_resolucion'] or '—'}  \n"
-    f"**Fecha res.:** {row['fec_res']}"
-)
-c3.metric("% daño (pondf)", f"{(row['pondf'] or 0):.2f}%")
-
+c1.markdown(f"### {row['productor_nombre'] or 's/d'}")
+c1.write(f"**CUIT/CUIL:** {row['cuit_cuil'] or '—'} · **Documento:** {row['documento_nro'] or '—'}")
+c2.write(f"**Norma / evento:** {row['norma_evento'] or '—'}  \n**Evento ID:** {row['evento_id'] or '—'}  \n**Fuente:** {row['origen_dato']}")
+c3.metric("% daño ponderado", "—" if row["pondf"] is None else f"{row['pondf']:.2f}%")
 st.write(
-    f"**Ubicación declarada:** {row['provincia']} · {row['departamento']} · "
-    f"{row['localidad']} · {row['paraje']}  ·  **Fecha DDJJ:** {row['fecha']}"
+    f"**DDJJ:** {row['ddjj_all_id']} · **Trámite:** {row['tramite_id'] or '—'} · "
+    f"**Fecha:** {row['fecha']} · **Ubicación:** {row['departamento'] or '—'} / "
+    f"{row['localidad'] or '—'} / {row['paraje'] or '—'}"
 )
-st.divider()
+if row["origen_dato"] == "ddjj_2023_excel":
+    st.caption(
+        "Numero Certificado no se expone como norma: Decreto 2099/23 proviene del bridge normativo validado."
+    )
 
-# ---- Ponderaciones por rubro ----
-st.subheader("Ponderaciones por rubro")
-pond = run_query(
-    """
-    SELECT rt.nombre AS rubro, p.estimados, p.obtenidos, p.perdidas_ponde AS perdida_pct
-    FROM ponderaciones_ddjj p
-    JOIN rubro_tipos rt ON rt.id_rubro = p.rubro
-    WHERE p.id_ddjj = :id
-    ORDER BY p.rubro
-    """,
-    {"id": int(ddjj_id)},
-)
-st.dataframe(pond, use_container_width=True, hide_index=True)
+origin = row["origen_dato"]
+current_id = row["id_ddjj_actual"]
+historic_id = row["tramite_id"]
+params = {"origin": origin, "current_id": current_id, "historic_id": historic_id}
+join_filter = "origen_dato=:origin AND ((:current_id IS NOT NULL AND id_ddjj_actual=:current_id) OR (:historic_id IS NOT NULL AND ddjj_hist_id=:historic_id))"
 
-# ---- Tabs por rubro ----
-t_ag, t_gan, t_for, t_otr, t_adj = st.tabs(
-    ["Agricultura", "Ganadería", "Forestal", "Mejoras / Invernaculos", "Adremas / Adjuntos"]
-)
-
+t_ag, t_gan, t_adr, t_trace = st.tabs(["Agricultura", "Ganadería", "Adremas", "Trazabilidad"])
 with t_ag:
-    df = run_query(
-        """
-        SELECT a.id_agricultura, ct.CultivoTipoDesc AS tipo,
-               c.cultivodesc AS cultivo, a.sup_sembrada, a.sup_afectada,
-               a.prod_estimada, a.prod_obtenida, a.estado, a.porcentaje
-        FROM agricultura a
-        LEFT JOIN cultivostipo ct ON ct.id = a.tipo_cultivo
-        LEFT JOIN cultivos      c ON c.id  = a.id_cultivo
-        WHERE a.ddjj = :id
-        """,
-        {"id": int(ddjj_id)},
+    agri = run_query(
+        f"""SELECT COALESCE(especie,cultivo,categoria) AS producto,
+                    superficie_sembrada_uso, superficie_afectada,
+                    produccion_estimada, produccion_obtenida, source_sheet,
+                    flag_revision_manual, severidad_maxima
+             FROM vw_all_agricultura WHERE {join_filter}""",
+        params,
     )
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
+    st.dataframe(agri, use_container_width=True, hide_index=True)
 with t_gan:
-    bv = run_query(
-        """SELECT cantivaca, cantivaqui, cantiterne, cantinovi, cantinovilli,
-                  cantitoro, cantibufa, prodespe, prodobte,
-                  carnestimada, carneobtenida, carneperdida
-           FROM bovinos WHERE idddjj=:id""",
-        {"id": int(ddjj_id)},
+    gan = run_query(
+        f"""SELECT especie, categoria, existencias, mortandad,
+                    superficie_ganadera_uso, superficie_ganadera_afectada,
+                    source_sheet, flag_mortandad_mayor_existencias,
+                    flag_revision_manual, severidad_maxima
+             FROM vw_all_ganaderia_resumen WHERE {join_filter}""",
+        params,
     )
-    ov = run_query(
-        "SELECT canticabe, mortacabe, prodcor, corobte, prodlana, lanaobte, "
-        "perdilana FROM ovinos WHERE idddjj=:id",
-        {"id": int(ddjj_id)},
-    )
-    po = run_query(
-        "SELECT canticabe, mortacabe, prodcor, corobte FROM porcinos "
-        "WHERE idddjj=:id",
-        {"id": int(ddjj_id)},
-    )
-    av = run_query(
-        "SELECT existencia, perdida, prodnor, prodobte FROM avicultura "
-        "WHERE idddjj=:id",
-        {"id": int(ddjj_id)},
-    )
-    ap = run_query(
-        "SELECT cantcol, canafec, prodnormiel, prodobtemiel, mielperdida "
-        "FROM apicultura WHERE idddjj=:id",
-        {"id": int(ddjj_id)},
-    )
-    st.write("**Bovinos**"); st.dataframe(bv, hide_index=True, use_container_width=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.write("**Ovinos**"); st.dataframe(ov, hide_index=True, use_container_width=True)
-        st.write("**Aves**"); st.dataframe(av, hide_index=True, use_container_width=True)
-    with c2:
-        st.write("**Porcinos**"); st.dataframe(po, hide_index=True, use_container_width=True)
-        st.write("**Colmenas**"); st.dataframe(ap, hide_index=True, use_container_width=True)
-
-with t_for:
-    df = run_query(
-        """SELECT supuso, supafe, superdida, prodmaes, prodmaob,
-                  madestimada, madeperdida, prodposes, posteperdida,
-                  prodreses, resiperdida
-           FROM forestacion WHERE idddjj=:id""",
-        {"id": int(ddjj_id)},
-    )
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-with t_otr:
-    mej = run_query(
-        "SELECT mejora, vestimado, incidencia, pesesp, pesper "
-        "FROM perdidas_mejoras WHERE idddjj=:id",
-        {"id": int(ddjj_id)},
-    )
-    st.write("**Pérdidas en mejoras**")
-    st.dataframe(mej, use_container_width=True, hide_index=True)
-
-    inv = run_query(
-        "SELECT cobertura_plasticas, estructuras, supsemb, supafect, "
-        "coberplastiperdi, danoplastiperdi FROM perdidas_invernaculos "
-        "WHERE ddjj=:id",
-        {"id": int(ddjj_id)},
-    )
-    st.write("**Invernáculos**")
-    st.dataframe(inv, use_container_width=True, hide_index=True)
-
-    plu = run_query(
-        "SELECT cobertura_plantas, coberperdi, dano_planta, danoperdi "
-        "FROM perdidas_plurianuales WHERE ddjj=:id",
-        {"id": int(ddjj_id)},
-    )
-    st.write("**Cultivos plurianuales**")
-    st.dataframe(plu, use_container_width=True, hide_index=True)
-
-with t_adj:
-    adr = run_query(
-        """
-        SELECT a.adrema, a.superficie, ta.TipoActividadDesc AS actividad,
-               tt.descripcion AS tenencia, a.departamento,
-               e.nombre_estab, e.paraje_estab
-        FROM adremas a
-        LEFT JOIN tipoactividad ta ON ta.TipoActividadId = a.actividad
-        LEFT JOIN tipotenencia  tt ON tt.id              = a.tenencia
-        LEFT JOIN establecimientos e ON e.id_establecimiento = a.id_establecimiento
-        WHERE a.ddjj = :id
-        """,
-        {"id": int(ddjj_id)},
-    )
-    st.write("**Adremas / parcelas**")
+    st.dataframe(gan, use_container_width=True, hide_index=True)
+    if origin == "ddjj_2023_excel":
+        st.caption("Las medidas inválidas por reglas de calidad se mantienen nulas en la vista analítica.")
+with t_adr:
+    if origin == "ddjj_2023_excel":
+        adr = run_query(
+            """SELECT adrema, superficie, actividad_original AS actividad,
+                      departamento, municipio, localidad, paraje,
+                      source_row_number, dq_adrema_duplicada_en_tramite
+               FROM stg_ddjj_2023_adrema
+               WHERE tramite_id=:tramite_id AND adrema_unica_indicador=1
+               ORDER BY adrema""",
+            {"tramite_id": historic_id},
+        )
+    elif current_id is not None:
+        adr = run_query(
+            "SELECT adrema, superficie, departamento FROM adremas WHERE ddjj=:id",
+            {"id": int(current_id)},
+        )
+    else:
+        adr = run_query("SELECT NULL AS adrema WHERE 1=0")
     st.dataframe(adr, use_container_width=True, hide_index=True)
-
-    docs = run_query(
-        """
-        SELECT codigo, documentacion, marcar
-        FROM documentacion WHERE idddjj=:id ORDER BY codigo
-        """,
-        {"id": int(ddjj_id)},
-    )
-    st.write(f"**Documentación adjunta** — {len(docs)} ítems")
-    st.dataframe(docs, use_container_width=True, hide_index=True)
-
-    fotos = run_query(
-        "SELECT id, file FROM fotos WHERE iddjj=:id", {"id": int(ddjj_id)}
-    )
-    st.write(f"**Fotos** — {len(fotos)} archivo(s)")
-    st.dataframe(fotos, use_container_width=True, hide_index=True)
+with t_trace:
+    st.dataframe(cab, use_container_width=True, hide_index=True)
