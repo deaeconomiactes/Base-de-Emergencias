@@ -139,6 +139,7 @@ Solo una asignación con confianza `alta` o `media`, fuente verificable y valida
 - `coincidencia por período certificado`
 - `coincidencia por tipo certificado`
 - `correspondencia manual validada`
+- `correspondencia institucional validada`
 - `fuente administrativa externa`
 - `otro`
 
@@ -218,19 +219,23 @@ Las fechas de inicio y fin solo pueden ser nulas cuando la fuente normativa no d
 - `source_file_bridge` debe conservar el nombre del archivo de trabajo.
 - `Numero Certificado` no puede registrarse como única evidencia normativa.
 
-## 9. Plantilla local propuesta, no creada
+## 9. Plantilla y bridge local
 
 Ruta prevista:
 
 `data_processed/ddjj_2023_excel/bridge/bridge_ddjj_evento_normativo_2023_template.csv`
 
-La plantilla **no se crea en esta etapa**. Su encabezado mínimo propuesto, en orden, es:
+La plantilla local fue creada con el siguiente encabezado mínimo, en orden:
 
 ```text
 tramite_id,evento_id_normativo,tipo_norma,numero_norma,anio_norma,nombre_evento,fecha_inicio_evento,fecha_fin_evento,criterio_asignacion,fuente_normativa,validado_por,fecha_validacion,confianza_asignacion,observaciones,origen_dato,source_file_bridge
 ```
 
-Antes de materializarla se debe decidir si se incorporan las extensiones `es_evento_principal`, `rol_evento`, `estado_vinculacion`, `motivo_no_integrable` y `evidencia_referencia`.
+El bridge operativo local se materializó en:
+
+`data_processed/ddjj_2023_excel/bridge/bridge_ddjj_evento_normativo_2023.csv`
+
+La versión actual utiliza una sola asignación principal común por `tramite_id`, por lo que no requiere todavía las extensiones `es_evento_principal`, `rol_evento`, `estado_vinculacion`, `motivo_no_integrable` y `evidencia_referencia`. Estas extensiones deberán reconsiderarse si en el futuro se admite multiplicidad normativa.
 
 La plantilla será un artefacto local de trabajo. No deberá contener fórmulas, filas precargadas por inferencia ni información normativa no validada.
 
@@ -322,18 +327,48 @@ Aunque se alcance el criterio de cobertura:
 
 La aprobación normativa y la validación técnica son controles complementarios; ninguna reemplaza a la otra.
 
-## 14. Próximos pasos recomendados
+## 14. Aplicación institucional para DDJJ 2023
+
+La institución informó que la base DDJJ 2023 Excel corresponde al **Decreto 2099/23**. Esta decisión habilitó la construcción local de una asignación normativa común para todos los trámites integrables.
+
+### Universo aplicado
+
+- Universo maestro: **1.493 trámites**.
+- Trámites anulados excluidos: **5**.
+- Trámites fuera de 2023 excluidos: **5**.
+- Superposición entre ambas exclusiones: **0**.
+- Universo integrable y filas del bridge: **1.483**.
+
+No se excluyeron trámites por certificado nulo, ADREMA duplicada, mortandad mayor que cantidad ni superficies negativas. Esas alertas se conservan y, cuando corresponda, limitan indicadores cuantitativos, pero no eliminan la existencia administrativa del trámite.
+
+### Asignación común
+
+- `evento_id_normativo = DECRETO_2099_2023`
+- `tipo_norma = Decreto`
+- `numero_norma = 2099`
+- `anio_norma = 2023`
+- `nombre_evento = Decreto 2099/23`
+- `criterio_asignacion = correspondencia institucional validada`
+- `confianza_asignacion = alta`
+- `fecha_validacion = 2026-07-29`
+
+Las fechas de inicio y fin del evento permanecen vacías porque no constan en la base normalizada utilizada. `validado_por` permanece como `pendiente_completar`; esto no invalida la asignación institucional informada, pero debe resolverse antes de autorizar una carga a staging.
+
+### Estado técnico
+
+El bridge fue construido localmente, pero todavía debe validarse mediante un control reproducible específico. La carga a TiDB, las vistas unificadas y el dashboard continúan bloqueados hasta completar esa validación y aprobar formalmente el archivo resultante.
+
+## 15. Próximos pasos recomendados
 
 1. Designar responsables normativos, funcionales y técnicos.
 2. Acordar la identidad y el catálogo maestro de `evento_id_normativo`.
 3. Confirmar los campos adicionales necesarios para multiplicidad e integración parcial.
 4. Identificar y reunir las fuentes normativas externas autorizadas.
 5. Aprobar formalmente este diseño.
-6. Crear recién entonces la plantilla local del bridge.
-7. Completar la correspondencia sin inferencias automáticas desde `Numero Certificado`.
-8. Revisar manualmente asignaciones de confianza media, baja o pendiente.
-9. Crear el script 17 solamente después de aprobar la estructura final.
-10. Validar integridad, cobertura y trazabilidad del bridge.
+6. Completar `validado_por` con el responsable institucional correspondiente.
+7. Mantener la correspondencia sin inferencias desde `Numero Certificado`.
+8. Crear el script 17 solamente después de autorizar su desarrollo.
+9. Validar integridad, cobertura, unicidad y trazabilidad del bridge de 1.483 filas.
+10. Aprobar formalmente el bridge validado.
 11. Evaluar el criterio de desbloqueo.
 12. Diseñar posteriormente una carga a staging, nunca directa a vistas finales.
-

@@ -24,7 +24,7 @@ La documentación se basa en los resultados reproducibles de auditoría, transfo
 - No se modificó TiDB, ninguna vista SQL ni el dashboard.
 - No se realizó carga, commit ni push como parte de estas etapas.
 
-La base permanece en estado **normalizada-local-validada-con-advertencias**. El estado `WARN` significa que la estructura normalizada es técnicamente consistente, pero el bridge normativo y otros pendientes técnicos todavía impiden autorizar su integración operativa.
+La base permanece en estado **normalizada-local-validada-con-advertencias**. La institución informó que corresponde al **Decreto 2099/23** y ya se construyó un bridge normativo local para los trámites integrables. El bridge todavía requiere validación técnica y aprobación nominativa antes de autorizar cualquier integración operativa.
 
 ## Tablas normalizadas generadas
 
@@ -175,16 +175,16 @@ Las exclusiones son selectivas y no modifican la fuente ni las tablas normalizad
 
 **Estado de la decisión: resuelta metodológicamente; bloqueo técnico vigente por bridge pendiente.**
 
-La base DDJJ 2023 Excel no contiene por sí sola una clave normativa confiable equivalente a decreto, resolución o evento de emergencia. `Numero Certificado` es un dato administrativo y no debe utilizarse para inferir ninguna de esas identidades.
+La base DDJJ 2023 Excel no contiene por sí sola una clave normativa confiable equivalente a decreto, resolución o evento de emergencia. `Numero Certificado` continúa siendo un dato administrativo y no se utilizó para inferir la asignación. La vinculación proviene de una nueva confirmación institucional: la base corresponde al **Decreto 2099/23**.
 
 La regla adoptada es la siguiente:
 
 1. La base no se integrará al Registro unificado sin una vinculación normativa externa validada.
 2. No se utilizará `Numero Certificado` para inferir un evento normativo.
-3. Se deberá construir una tabla puente externa denominada `bridge_ddjj_evento_normativo`, o equivalente.
-4. La tabla puente vinculará `tramite_id` con una identidad normativa validada.
+3. Se construyó localmente `bridge_ddjj_evento_normativo_2023.csv` como tabla puente externa.
+4. La tabla puente vincula cada `tramite_id` integrable con `DECRETO_2099_2023`.
 5. La vinculación podrá apoyarse en fuentes externas autorizadas: decreto, resolución, período de emergencia, tipo de certificado, fechas desde/hasta y normativa administrativa validada.
-6. Hasta construir y validar el bridge, no se cargará la base a TiDB, no se integrará a vistas unificadas ni se incorporará al dashboard productivo.
+6. Hasta validar técnicamente y aprobar el bridge, no se cargará la base a TiDB, no se integrará a vistas unificadas ni se incorporará al dashboard productivo.
 7. Mientras tanto, la fuente permanecerá en estado **normalizada-local-validada-con-advertencias**.
 8. Toda futura carga se realizará primero a staging y nunca directamente a vistas finales.
 
@@ -204,7 +204,25 @@ La regla adoptada es la siguiente:
 - `fecha_validacion`
 - `observaciones`
 
-La decisión conceptual está cerrada, pero el bridge aún no fue diseñado ni validado. Este bloqueo técnico debe resolverse antes de crear o ejecutar cualquier script de carga.
+La decisión conceptual está cerrada y el bridge fue construido localmente. El bloqueo técnico vigente es su validación reproducible, la identificación del responsable en `validado_por` y la aprobación formal antes de crear o ejecutar cualquier script de carga.
+
+## Aplicación normativa informada: Decreto 2099/23
+
+La confirmación institucional asigna una norma común a la base DDJJ 2023 Excel. El bridge local contiene **1.483 filas**, una por cada trámite integrable, con los siguientes valores principales:
+
+- `evento_id_normativo = DECRETO_2099_2023`;
+- `tipo_norma = Decreto`;
+- `numero_norma = 2099`;
+- `anio_norma = 2023`;
+- `nombre_evento = Decreto 2099/23`;
+- `criterio_asignacion = correspondencia institucional validada`;
+- `confianza_asignacion = alta`.
+
+El universo se obtuvo desde los **1.493 trámites** maestros, excluyendo **5 anulados** y **5 fuera de 2023**, sin superposición. No se aplicaron exclusiones por certificado nulo, ADREMAS duplicadas, mortandad o superficies negativas, porque esas alertas no eliminan la existencia administrativa del trámite.
+
+Las fechas normativas permanecen vacías porque no constan en la base utilizada. El campo `validado_por` conserva el valor `pendiente_completar`, que deberá reemplazarse por el responsable institucional antes de autorizar staging.
+
+La confirmación del Decreto 2099/23 desbloquea la construcción del bridge, pero **no desbloquea la carga a TiDB, las vistas unificadas ni el dashboard**. El próximo control obligatorio es validar técnicamente el bridge mediante un script específico, todavía no creado.
 
 ## Bloqueos metodológicos antes de carga
 
@@ -213,12 +231,12 @@ Las definiciones sobre `mortandad > cantidad`, superficies negativas, ADREMAS du
 1. Revisar el **registro con cantidad ganadera negativa**.
 2. Revisar el **registro con mortandad negativa**.
 3. Resolver o documentar el **registro ganadero huérfano** cuyo `tramite_id` no existe en la hoja principal `Tramites`.
-4. Diseñar, construir y validar la correspondencia normativa externa mediante `bridge_ddjj_evento_normativo`, o equivalente, antes de crear un script de carga.
+4. Validar técnicamente `bridge_ddjj_evento_normativo_2023.csv`, completar `validado_por` y aprobar formalmente la correspondencia antes de crear un script de carga.
 5. Mantener bloqueada la carga a TiDB mientras estos puntos no cuenten con definición institucional y validación documentada.
 
 ## Decisión de control
 
-> La base DDJJ 2023 Excel queda en estado normalizada-local-validada-con-advertencias. No debe cargarse a TiDB ni integrarse al Registro unificado, las vistas unificadas o el dashboard hasta diseñar, construir y validar `bridge_ddjj_evento_normativo` y cerrar los demás pendientes técnicos vigentes.
+> La base DDJJ 2023 Excel queda en estado normalizada-local-validada-con-advertencias, con bridge local construido para el Decreto 2099/23. No debe cargarse a TiDB ni integrarse al Registro unificado, las vistas unificadas o el dashboard hasta validar técnicamente y aprobar el bridge, además de cerrar los demás pendientes vigentes.
 
 Esta decisión implica que:
 
@@ -236,8 +254,8 @@ Esta decisión implica que:
 4. Revisar los valores negativos de cantidad y mortandad.
 5. Implementar en una futura transformación o vista analítica la regla aprobada para ADREMAS duplicadas: preservar las filas originales, contar pares únicos para establecimientos y no agregar superficies duplicadas sin criterio institucional.
 6. Implementar en una futura transformación o vista analítica las reglas aprobadas para trámites anulados y fuera de 2023, preservando el universo original y generando universos analíticos válidos según estado y `anio_presentacion`.
-7. Diseñar, construir y validar `bridge_ddjj_evento_normativo`, o equivalente, utilizando una fuente externa autorizada y documentada.
-8. Diseñar cualquier script de carga únicamente después de aprobar el bridge normativo.
+7. Crear, cuando se autorice, un script específico para validar cobertura, integridad, unicidad y trazabilidad de `bridge_ddjj_evento_normativo_2023.csv`.
+8. Completar `validado_por`, aprobar formalmente el bridge y diseñar cualquier script de carga únicamente después de superar esa validación.
 9. Cargar primero a tablas de staging; nunca cargar directamente a vistas o tablas finales.
 10. Validar staging contra las tablas normalizadas locales, conciliando filas, claves, nulos y banderas.
 11. Recién después evaluar la integración en vistas unificadas y en el dashboard.
