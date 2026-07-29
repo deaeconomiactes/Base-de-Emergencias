@@ -18,6 +18,7 @@ ORIGIN = "ddjj_2023_excel"
 EVENT = "DECRETO_2099_2023"
 LABEL = "Decreto 2099/23"
 EXPECTED = 1483
+EXPECTED_ADREMA_PAIRS_2023 = 2374
 
 PAGES = {
     "Home": "Home.py",
@@ -196,6 +197,101 @@ def inspect_data(checks: Checks) -> dict:
                ) x""", metrics["adremas"],
         )
         metrics["adremas"] = unique_pairs
+        checks.equal(
+            "adrema_pairs_2023_expected", "Adremas",
+            "Pares Ãºnicos tramite_id + adrema DDJJ 2023",
+            unique_pairs, EXPECTED_ADREMA_PAIRS_2023,
+        )
+        checks.add(
+            "adrema_origin_2023", "Adremas",
+            "Origen ddjj_2023_excel devuelve registros 2023",
+            "PASS" if unique_pairs > 0 else "FAIL",
+            unique_pairs, "> 0",
+        )
+        db_check(
+            checks, engine, "adrema_year_2023_exists", "Adremas",
+            "El aÃ±o 2023 existe en el universo de ADREMAS",
+            """SELECT COUNT(DISTINCT anio) FROM (
+                   SELECT YEAR(dj.fecha) AS anio
+                   FROM adremas a JOIN ddjj_personas dj ON dj.id_ddjj=a.ddjj
+                   WHERE a.adrema IS NOT NULL AND TRIM(a.adrema)<>''
+                   UNION ALL
+                   SELECT anio FROM stg_ddjj_2023_tramite
+               ) years_all WHERE anio=2023""",
+            1,
+        )
+        metrics["adrema_years"] = scalar(
+            engine,
+            """SELECT COUNT(DISTINCT anio) FROM (
+                   SELECT YEAR(dj.fecha) AS anio
+                   FROM adremas a JOIN ddjj_personas dj ON dj.id_ddjj=a.ddjj
+                   WHERE a.adrema IS NOT NULL AND TRIM(a.adrema)<>''
+                   UNION ALL
+                   SELECT anio FROM stg_ddjj_2023_tramite
+                   WHERE anio IS NOT NULL
+               ) years_all WHERE anio IS NOT NULL""",
+        )
+        checks.add(
+            "adrema_all_years", "Adremas",
+            "AÃ±o Todos contiene mÃ¡s de un aÃ±o",
+            "PASS" if metrics["adrema_years"] > 1 else "FAIL",
+            metrics["adrema_years"], "> 1",
+        )
+        metrics["adrema_historical_years"] = scalar(
+            engine,
+            """SELECT COUNT(DISTINCT YEAR(dj.fecha))
+               FROM adremas a JOIN ddjj_personas dj ON dj.id_ddjj=a.ddjj
+               WHERE a.adrema IS NOT NULL AND TRIM(a.adrema)<>''
+                 AND YEAR(dj.fecha)<>2023""",
+        )
+        checks.add(
+            "adrema_historical_year", "Adremas",
+            "Existe al menos un aÃ±o histÃ³rico distinto de 2023",
+            "PASS" if metrics["adrema_historical_years"] > 0 else "FAIL",
+            metrics["adrema_historical_years"], "> 0",
+        )
+        metrics["adrema_sources"] = scalar(
+            engine,
+            """SELECT COUNT(DISTINCT origen_dato) FROM (
+                   SELECT 'actual' AS origen_dato
+                   FROM adremas a JOIN ddjj_personas dj ON dj.id_ddjj=a.ddjj
+                   WHERE a.adrema IS NOT NULL AND TRIM(a.adrema)<>''
+                   UNION ALL
+                   SELECT origen_dato FROM stg_ddjj_2023_adrema
+                   WHERE adrema_unica_indicador=1
+               ) sources_all""",
+        )
+        checks.add(
+            "adrema_all_sources", "Adremas",
+            "Origen Todos contiene mÃ¡s de una fuente",
+            "PASS" if metrics["adrema_sources"] > 1 else "FAIL",
+            metrics["adrema_sources"], "> 1",
+        )
+        metrics["adremas_all"] = scalar(
+            engine,
+            """SELECT
+                   (SELECT COUNT(*) FROM adremas a
+                    JOIN ddjj_personas dj ON dj.id_ddjj=a.ddjj
+                    WHERE a.adrema IS NOT NULL AND TRIM(a.adrema)<>'')
+                 + (SELECT COUNT(*) FROM stg_ddjj_2023_adrema
+                    WHERE adrema_unica_indicador=1)""",
+        )
+        checks.add(
+            "adrema_all_not_only_2023", "Adremas",
+            "Sin filtro, el universo supera la rama DDJJ 2023",
+            "PASS" if metrics["adremas_all"] > unique_pairs else "FAIL",
+            metrics["adremas_all"], f"> {unique_pairs}",
+        )
+        metrics["adremas_year_2023"] = scalar(
+            engine,
+            """SELECT
+                   (SELECT COUNT(*) FROM adremas a
+                    JOIN ddjj_personas dj ON dj.id_ddjj=a.ddjj
+                    WHERE a.adrema IS NOT NULL AND TRIM(a.adrema)<>''
+                      AND YEAR(dj.fecha)=2023)
+                 + (SELECT COUNT(*) FROM stg_ddjj_2023_adrema
+                    WHERE adrema_unica_indicador=1)""",
+        )
         db_check(
             checks, engine, "adrema_join", "Ficha Productor", "ADREMAS 2023 vinculables a ficha",
             """SELECT COUNT(*) FROM stg_ddjj_2023_adrema a
@@ -268,6 +364,9 @@ def write_outputs(checks: Checks, metrics: dict):
         f"- DDJJ 2023 observadas: **{metrics.get('ddjj', 's/d')}** (esperadas: **{EXPECTED}**).",
         f"- Filtro 2023 + {LABEL} + {ORIGIN}: **{metrics.get('combined', 's/d')}**.",
         f"- Productores 2023: **{metrics.get('producers', 's/d')}**.",
+        f"- ADREMAS con Todos: **{metrics.get('adremas_all', 's/d')}**.",
+        f"- ADREMAS filtradas a 2023: **{metrics.get('adremas_year_2023', 's/d')}**.",
+        f"- Cantidad de anios disponibles: **{metrics.get('adrema_years', 's/d')}**; fuentes: **{metrics.get('adrema_sources', 's/d')}**.",
         f"- Pares únicos trámite + ADREMA: **{metrics.get('adremas', 's/d')}**.", "",
         "## Estado por página", "", markdown_table(page_summary), "",
         "## Interpretación", "",
