@@ -1,14 +1,23 @@
 """Listado unificado y búsqueda de productores."""
 from __future__ import annotations
 
+import re
+
 import streamlit as st
 
-from utils import is_unified_mode, run_query
+from utils import display_identifier, is_unified_mode, run_query
 
 st.set_page_config(page_title="Productores", layout="wide")
 st.title("Productores")
 
 unified = is_unified_mode()
+
+
+def _numeric_search(value: str) -> str | None:
+    if re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", value):
+        return None
+    digits = re.sub(r"[^0-9]", "", re.sub(r"\.0$", "", value.strip()))
+    return digits or None
 
 with st.sidebar:
     st.header("Filtros")
@@ -42,11 +51,17 @@ if unified:
     conds = ["1=1"]
     params: dict = {"limite": limite}
     if q:
+        numeric_q = _numeric_search(q)
         conds.append(
             "(p.productor_nombre LIKE :q OR p.cuit_cuil LIKE :q "
-            "OR p.documento_nro LIKE :q)"
+            "OR p.documento_nro LIKE :q "
+            "OR (:q_digits IS NOT NULL AND ("
+            "REGEXP_REPLACE(REGEXP_REPLACE(COALESCE(p.cuit_cuil,''), '\\\\.0$', ''), '[^0-9]', '') LIKE :q_digits_like "
+            "OR REGEXP_REPLACE(REGEXP_REPLACE(COALESCE(p.documento_nro,''), '\\\\.0$', ''), '[^0-9]', '') LIKE :q_digits_like)))"
         )
         params["q"] = f"%{q}%"
+        params["q_digits"] = numeric_q
+        params["q_digits_like"] = f"%{numeric_q}%" if numeric_q else None
     if origen_sel != "(todos)":
         conds.append("p.origen_dato = :origen")
         params["origen"] = origen_sel
@@ -89,7 +104,13 @@ if unified:
         params,
     )
 else:
-    params = {"limite": limite, "q": f"%{q}%"}
+    numeric_q = _numeric_search(q)
+    params = {
+        "limite": limite,
+        "q": f"%{q}%",
+        "q_digits": numeric_q,
+        "q_digits_like": f"%{numeric_q}%" if numeric_q else None,
+    }
     df = run_query(
         """
         SELECT CAST(p.ProductorId AS CHAR) AS productor_id,
@@ -105,7 +126,10 @@ else:
         LEFT JOIN localidades loc ON loc.LocalidadId=dom.LocalidadId
         LEFT JOIN ddjj_personas dj ON dj.id_productor=p.ProductorId
         WHERE (:q = '%%' OR p.ProductorDenominacion LIKE :q
-               OR p.CUITCUIL LIKE :q OR p.DocumentoNro LIKE :q)
+               OR p.CUITCUIL LIKE :q OR p.DocumentoNro LIKE :q
+               OR (:q_digits IS NOT NULL AND (
+                   REGEXP_REPLACE(REGEXP_REPLACE(COALESCE(p.CUITCUIL,''), '\\.0$', ''), '[^0-9]', '') LIKE :q_digits_like
+                   OR REGEXP_REPLACE(REGEXP_REPLACE(COALESCE(p.DocumentoNro,''), '\\.0$', ''), '[^0-9]', '') LIKE :q_digits_like)))
         GROUP BY p.ProductorId, p.ProductorDenominacion, p.CUITCUIL,
                  p.DocumentoNro, ta.TipoActividadDesc, dep.DepartamentoDesc,
                  loc.LocalidadDesc, p.renspa
@@ -115,7 +139,10 @@ else:
     )
 
 st.caption(f"Mostrando **{len(df):,}** productores sin multiplicarlos por sus detalles.")
-st.dataframe(df, use_container_width=True, hide_index=True, height=590)
+df_display = df.copy()
+df_display["cuit_cuil"] = df_display["cuit_cuil"].apply(lambda value: display_identifier(value, "cuit_cuil"))
+df_display["documento_nro"] = df_display["documento_nro"].apply(lambda value: display_identifier(value, "documento"))
+st.dataframe(df_display, use_container_width=True, hide_index=True, height=590)
 
 if unified and not df.empty:
     selected = st.selectbox(

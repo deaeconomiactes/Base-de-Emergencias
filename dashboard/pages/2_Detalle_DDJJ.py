@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from utils import is_unified_mode, run_query
+from utils import display_identifier, is_unified_mode, run_query
 
 st.set_page_config(page_title="Detalle DDJJ", layout="wide")
 st.title("Detalle de una DDJJ")
@@ -44,7 +44,7 @@ row = cab.iloc[0]
 
 c1, c2, c3 = st.columns([2, 2, 1])
 c1.markdown(f"### {row['productor_nombre'] or 's/d'}")
-c1.write(f"**CUIT/CUIL:** {row['cuit_cuil'] or '—'} · **Documento:** {row['documento_nro'] or '—'}")
+c1.write(f"**CUIT/CUIL:** {display_identifier(row['cuit_cuil'], 'cuit_cuil')} · **Documento:** {display_identifier(row['documento_nro'], 'documento')}")
 c2.write(f"**Norma / evento:** {row['norma_evento'] or '—'}  \n**Evento ID:** {row['evento_id'] or '—'}  \n**Fuente:** {row['origen_dato']}")
 c3.metric("% daño ponderado", "—" if row["pondf"] is None else f"{row['pondf']:.2f}%")
 st.write(
@@ -106,4 +106,7 @@ with t_adr:
         adr = run_query("SELECT NULL AS adrema WHERE 1=0")
     st.dataframe(adr, use_container_width=True, hide_index=True)
 with t_trace:
-    st.dataframe(cab, use_container_width=True, hide_index=True)
+    cab_display = cab.copy()
+    cab_display["cuit_cuil"] = cab_display["cuit_cuil"].apply(lambda value: display_identifier(value, "cuit_cuil"))
+    cab_display["documento_nro"] = cab_display["documento_nro"].apply(lambda value: display_identifier(value, "documento"))
+    st.dataframe(cab_display, use_container_width=True, hide_index=True)

@@ -10,6 +10,7 @@ Lee la conexión del .env (DATA_SOURCE = 'local' | 'tidb') y expone:
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -153,6 +154,47 @@ def db_info() -> dict:
 
 
 # ---------- Helpers de dominio ----------
+
+
+_MISSING_IDENTIFIERS = {"", "none", "nan", "nat", "null", "<na>", "s/d", "sd", "sin dato", "sin datos"}
+
+
+def _identifier_digits(value) -> str:
+    """Devuelve solo los dígitos de un identificador para uso visual."""
+    if value is None or pd.isna(value):
+        return ""
+    text_value = str(value).strip()
+    if text_value.lower() in _MISSING_IDENTIFIERS:
+        return ""
+    text_value = re.sub(r"\.0$", "", text_value)
+    return re.sub(r"[^0-9]", "", text_value)
+
+
+def format_cuit_cuil(value) -> str:
+    """Formatea CUIT/CUIL para pantalla sin alterar el valor de origen."""
+    digits = _identifier_digits(value)
+    if len(digits) > 11:
+        surplus = len(digits) - 11
+        if digits[:surplus] == "0" * surplus:
+            digits = digits[surplus:]
+    if len(digits) == 11:
+        return f"{digits[:2]}-{digits[2:10]}-{digits[10]}"
+    return digits or "No registra"
+
+
+def format_documento(value) -> str:
+    """Limpia un DNI/documento solo para pantalla; nunca lo convierte a CUIT."""
+    digits = _identifier_digits(value)
+    digits = digits.lstrip("0") or ("0" if digits else "")
+    return digits or "No registra"
+
+
+def display_identifier(value, tipo: str) -> str:
+    """Selecciona el formateador visual según el tipo de identificador."""
+    normalized_type = tipo.strip().lower().replace("/", "_")
+    if normalized_type in {"cuit", "cuil", "cuit_cuil", "cuitcuil"}:
+        return format_cuit_cuil(value)
+    return format_documento(value)
 
 
 def fix_coord(s) -> float | None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from utils import is_unified_mode, run_query
+from utils import display_identifier, is_unified_mode, run_query
 
 st.set_page_config(page_title="Adremas", layout="wide")
 st.title("Adremas (parcelas catastrales)")
@@ -165,7 +165,9 @@ st.caption(
     f"superficie informada: **{total_surface:,.2f} ha**. "
     f"La tabla muestra **{len(df):,}** filas por el límite visual seleccionado."
 )
-st.dataframe(df, use_container_width=True, hide_index=True, height=570)
+df_display = df.copy()
+df_display["cuit_cuil"] = df_display["cuit_cuil"].apply(lambda value: display_identifier(value, "cuit_cuil"))
+st.dataframe(df_display, use_container_width=True, hide_index=True, height=570)
 
 with st.expander("Cobertura por año y fuente", expanded=True):
     st.dataframe(summary, use_container_width=True, hide_index=True)

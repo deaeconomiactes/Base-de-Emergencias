@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from utils import run_query
+from utils import display_identifier, run_query
 
 st.set_page_config(page_title="Ficha Productor", layout="wide")
 st.title("Ficha integral del productor")
@@ -36,6 +36,7 @@ DISPLAY_LABELS = {
     "productor_nombre": "Productor",
     "cuit_cuil": "CUIT/CUIL",
     "documento_nro": "Documento",
+    "renspa": "RENSPA",
     "tipo_juridico": "Tipo jurídico",
     "actividad": "Actividad",
     "actividad_principal": "Actividad principal",
@@ -303,6 +304,7 @@ def _query_candidates(search_text: str, limit: int) -> pd.DataFrame:
             productor_nombre,
             documento_nro,
             cuit_cuil,
+            renspa,
             actividad,
             departamento,
             localidad,
@@ -369,6 +371,7 @@ def _query_candidates(search_text: str, limit: int) -> pd.DataFrame:
             productor_nombre,
             documento_nro,
             cuit_cuil,
+            renspa,
             actividad,
             departamento,
             localidad,
@@ -415,6 +418,7 @@ def _query_related_productores(selected_row: pd.Series) -> pd.DataFrame:
             productor_nombre,
             documento_nro,
             cuit_cuil,
+            renspa,
             actividad,
             departamento,
             localidad,
@@ -434,6 +438,7 @@ def _query_related_productores(selected_row: pd.Series) -> pd.DataFrame:
                 productor_nombre,
                 documento_nro,
                 cuit_cuil,
+                renspa,
                 actividad,
                 departamento,
                 localidad,
@@ -801,6 +806,8 @@ candidate_view = candidates_visual[
         "severidad_maxima",
 ]
 ].copy()
+candidate_view["cuit_cuil"] = candidate_view["cuit_cuil"].apply(lambda value: display_identifier(value, "cuit_cuil"))
+candidate_view["documento_nro"] = candidate_view["documento_nro"].apply(lambda value: display_identifier(value, "documento"))
 st.dataframe(
     _clean_display_table(_rename_for_display(candidate_view, DISPLAY_LABELS)),
     use_container_width=True,
@@ -814,7 +821,7 @@ selected_id = st.selectbox(
     options,
     format_func=lambda value: (
         f"{_display_value(candidates_visual.loc[candidates_visual['productor_all_id'].astype(str) == value, 'productor_nombre'].iloc[0])}"
-        f" | Doc: {_display_value(candidates_visual.loc[candidates_visual['productor_all_id'].astype(str) == value, 'documento_nro'].iloc[0])}"
+        f" | Doc: {display_identifier(candidates_visual.loc[candidates_visual['productor_all_id'].astype(str) == value, 'documento_nro'].iloc[0], 'documento')}"
         f" | {_display_value(candidates_visual.loc[candidates_visual['productor_all_id'].astype(str) == value, 'tipo_coincidencia'].iloc[0])}"
     ),
 )
@@ -843,8 +850,17 @@ st.subheader("Datos del productor")
 nombre = _display_value(
     actual_row["ProductorDenominacion"] if actual_row is not None else selected.get("productor_nombre")
 )
-cuit = _display_value(actual_row["CUITCUIL"] if actual_row is not None else selected.get("cuit_cuil"))
-documento = _display_value(actual_row["DocumentoNro"] if actual_row is not None else selected.get("documento_nro"))
+cuit = display_identifier(actual_row["CUITCUIL"] if actual_row is not None else selected.get("cuit_cuil"), "cuit_cuil")
+documento = display_identifier(actual_row["DocumentoNro"] if actual_row is not None else selected.get("documento_nro"), "documento")
+renspa_values: list[str] = []
+for value in [
+    actual_row["renspa"] if actual_row is not None else None,
+    *related_productores.get("renspa", pd.Series(dtype=object)).tolist(),
+]:
+    for item in re.split(r"\s*[|,;]\s*", _safe_str(value)):
+        if item and item.lower() not in SIN_CLASIFICAR and item not in renspa_values:
+            renspa_values.append(item)
+renspa = ", ".join(renspa_values) if renspa_values else "No registra"
 actividad = _display_value(
     actual_row["actividad_principal"] if actual_row is not None else selected.get("actividad")
 )
@@ -858,11 +874,12 @@ localidad = _display_value(actual_row["localidad"] if actual_row is not None els
 c1, c2, c3 = st.columns(3)
 with c1:
     st.write(f"**Nombre / razón social:** {nombre}")
-    st.write(f"**CUIT:** {cuit}")
+    st.write(f"**CUIT/CUIL:** {cuit}")
     st.write(f"**Documento:** {documento}")
 with c2:
     st.write(f"**Tipo jurídico:** {tipo_juridico}")
     st.write(f"**Actividad principal:** {actividad}")
+    st.write(f"**RENSPA:** {renspa}")
 with c3:
     st.write(f"**Provincia:** {provincia}")
     st.write(f"**Departamento:** {departamento}")
