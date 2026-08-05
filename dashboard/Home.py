@@ -75,6 +75,14 @@ def altura_tabla(cantidad_filas: int, maximo: int = 300) -> int:
     return min(max(140, 35 * (cantidad_filas + 1)), maximo)
 
 
+def render_table_safe(df: pd.DataFrame | None, height: int = 300) -> None:
+    """Renderiza una tabla auxiliar con parámetros compatibles con Streamlit 1.37."""
+    if df is None or df.empty:
+        st.info("No hay datos para mostrar con los filtros activos.")
+        return
+    st.dataframe(df, hide_index=True, height=height)
+
+
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Productores", formato_conteo(kpis["productores"]))
 c2.metric("DDJJ", formato_conteo(kpis["ddjj"]))
@@ -505,10 +513,8 @@ if not df_evolucion.empty:
         with st.expander("Ver tabla de evolución anual", expanded=False):
             _, tabla_columna, _ = st.columns([1, 2, 1])
             with tabla_columna:
-                st.dataframe(
+                render_table_safe(
                     tabla_evolucion,
-                    hide_index=True,
-                    use_container_width=True,
                     height=altura_tabla(len(tabla_evolucion)),
                 )
     else:
@@ -644,10 +650,8 @@ if not df_res.empty:
     with st.expander("Ver tabla de resoluciones", expanded=False):
         _, tabla_columna, _ = st.columns([1, 3, 1])
         with tabla_columna:
-            st.dataframe(
+            render_table_safe(
                 tabla_resoluciones_mostrar,
-                hide_index=True,
-                use_container_width=True,
                 height=altura_tabla(len(tabla_resoluciones_mostrar)),
             )
 else:
@@ -727,10 +731,8 @@ with left:
             "DDJJ"
         ].map(lambda valor: f"{valor:,}")
         with st.expander("Ver tabla de departamentos", expanded=False):
-            st.dataframe(
+            render_table_safe(
                 tabla_departamentos_mostrar,
-                hide_index=True,
-                use_container_width=True,
                 height=altura_tabla(
                     len(tabla_departamentos_mostrar), maximo=280
                 ),
@@ -822,10 +824,9 @@ with right:
         with st.expander("Ver tabla de tramos de daño", expanded=False):
             _, tabla_columna, _ = st.columns([1, 6, 1])
             with tabla_columna:
-                st.table(
+                render_table_safe(
                     tabla_dano_mostrar,
-                    hide_index=True,
-                    width="content",
+                    height=altura_tabla(len(tabla_dano_mostrar)),
                 )
         st.caption(
             "El daño ponderado se agrupa en tramos. Los registros sin porcentaje "
