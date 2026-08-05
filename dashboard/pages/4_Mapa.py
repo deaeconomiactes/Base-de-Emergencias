@@ -7,7 +7,6 @@ import streamlit as st
 
 from utils import fix_coord, is_unified_mode, run_query
 
-st.set_page_config(page_title="Mapa", layout="wide")
 st.title("Mapa y resumen territorial")
 
 unified = is_unified_mode()

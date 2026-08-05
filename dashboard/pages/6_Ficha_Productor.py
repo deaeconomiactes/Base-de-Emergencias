@@ -9,7 +9,6 @@ import streamlit as st
 
 from utils import display_identifier, run_query
 
-st.set_page_config(page_title="Ficha Productor", layout="wide")
 st.title("Ficha integral del productor")
 
 

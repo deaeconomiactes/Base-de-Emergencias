@@ -5,7 +5,6 @@ import streamlit as st
 
 from utils import display_identifier, is_unified_mode, run_query
 
-st.set_page_config(page_title="Detalle DDJJ", layout="wide")
 st.title("Detalle de una DDJJ")
 
 if not is_unified_mode():

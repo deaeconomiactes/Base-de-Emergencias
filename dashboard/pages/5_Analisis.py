@@ -11,8 +11,6 @@ import streamlit as st
 from utils import is_unified_mode, run_query, table
 
 
-st.set_page_config(page_title="Análisis del Registro de Emergencias", layout="wide")
-
 SIN_CLASIFICAR = {
     "",
     "(s/d)",

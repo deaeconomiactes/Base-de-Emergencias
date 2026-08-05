@@ -5,7 +5,6 @@ import streamlit as st
 
 from utils import display_identifier, is_unified_mode, run_query
 
-st.set_page_config(page_title="Adremas", layout="wide")
 st.title("Adremas (parcelas catastrales)")
 st.caption(
     "Pares trámite + ADREMA del registro integrado. En DDJJ 2023 se muestra "

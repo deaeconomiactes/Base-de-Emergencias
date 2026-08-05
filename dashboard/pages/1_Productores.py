@@ -7,7 +7,6 @@ import streamlit as st
 
 from utils import display_identifier, is_unified_mode, run_query
 
-st.set_page_config(page_title="Productores", layout="wide")
 st.title("Productores")
 
 unified = is_unified_mode()
