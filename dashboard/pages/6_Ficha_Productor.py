@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from utils import display_identifier, run_query
+from utils import db_info, display_identifier, run_query
 
 st.title("Ficha integral del productor")
 
@@ -794,6 +794,31 @@ def _load_local_entregas() -> tuple[pd.DataFrame, pd.DataFrame, bool]:
     return fact, quality, True
 
 
+def _load_entregas() -> tuple[pd.DataFrame, pd.DataFrame, bool, str, str]:
+    """Prioriza TiDB Cloud y conserva CSV local como fallback de desarrollo."""
+    try:
+        use_tidb = db_info().get("source") == "TiDB Cloud"
+    except Exception:
+        use_tidb = False
+    tidb_error = ""
+    if use_tidb:
+        try:
+            fact = run_query("SELECT * FROM stg_entregas_emergencia")
+            try:
+                quality = run_query("SELECT * FROM stg_entregas_calidad_dato")
+            except Exception:
+                quality = pd.DataFrame()
+                tidb_error = "La tabla de alertas de entregas no está disponible en TiDB."
+            return fact, quality, True, "TiDB staging", tidb_error
+        except Exception:
+            tidb_error = "No se pudo consultar TiDB; se intentó usar el fallback local."
+
+    fact, quality, available = _load_local_entregas()
+    if available:
+        return fact, quality, True, "CSV local", tidb_error
+    return pd.DataFrame(), pd.DataFrame(), False, "Sin fuente disponible", tidb_error
+
+
 def _normalized_digits(value) -> str:
     text = re.sub(r"\.0$", "", _safe_str(value))
     return re.sub(r"\D", "", text)
@@ -897,21 +922,26 @@ def _format_entrega_number(value) -> str:
 def _render_entregas_tab(
     entregas: pd.DataFrame,
     quality: pd.DataFrame,
-    files_available: bool,
+    data_available: bool,
+    data_source: str,
+    load_warning: str,
 ) -> None:
     st.subheader("Entregas / asistencia")
     st.warning(
-        "La información de entregas/asistencia proviene de bases locales normalizadas "
-        "y validadas con advertencias. No modifica TiDB ni las vistas históricas."
+        f"La información de entregas/asistencia proviene de {data_source}, con datos "
+        "normalizados y validados con advertencias. Esta consulta no modifica TiDB ni "
+        "las vistas históricas."
     )
-    if not files_available:
+    if load_warning:
+        st.warning(load_warning)
+    if not data_available:
         st.info(
-            "No se encontraron datos locales de entregas/asistencia. Ejecutar scripts "
-            "25 y 26 antes de consultar esta sección."
+            "No se encontraron datos de entregas/asistencia en TiDB ni en el fallback local. "
+            "Ejecutar los scripts 25 a 28 antes de consultar esta sección."
         )
         return
     if entregas.empty:
-        st.info("No se encontraron entregas/asistencias con coincidencia confiable para este productor.")
+        st.info("Sin entregas registradas para este productor.")
         with st.expander("Metodología de vinculación"):
             _render_entregas_methodology()
         return
@@ -1121,9 +1151,15 @@ departamento = _display_value(
 )
 localidad = _display_value(actual_row["localidad"] if actual_row is not None else selected.get("localidad"))
 
-entregas_fact, entregas_quality, entregas_files_available = _load_local_entregas()
+(
+    entregas_fact,
+    entregas_quality,
+    entregas_data_available,
+    entregas_data_source,
+    entregas_load_warning,
+) = _load_entregas()
 entregas_keys = _selected_key_sets(selected, actual_row, related_productores, renspa_values, adremas)
-entregas = _link_entregas(entregas_fact, entregas_keys) if entregas_files_available else pd.DataFrame()
+entregas = _link_entregas(entregas_fact, entregas_keys) if entregas_data_available else pd.DataFrame()
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -1188,7 +1224,7 @@ st.caption(
 
 k9, k10, _, _ = st.columns(4)
 k9.metric("Daño promedio", "-" if pd.isna(pondf_prom) else f"{pondf_prom:.2f}%")
-k10.metric("Entregas/asistencias", f"{len(entregas):,}" if entregas_files_available else "Sin datos locales")
+k10.metric("Entregas/asistencias", f"{len(entregas):,}" if entregas_data_available else "Sin datos")
 
 tab_ddjj, tab_agri, tab_gan, tab_geo, tab_entregas, tab_calidad = st.tabs(
     [
@@ -1419,7 +1455,10 @@ with tab_geo:
             st.dataframe(_clean_display_table(documentacion), use_container_width=True, hide_index=True)
 
 with tab_entregas:
-    _render_entregas_tab(entregas, entregas_quality, entregas_files_available)
+    _render_entregas_tab(
+        entregas, entregas_quality, entregas_data_available,
+        entregas_data_source, entregas_load_warning,
+    )
 
 with tab_calidad:
     st.subheader("Calidad de datos")
