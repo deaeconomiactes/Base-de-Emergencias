@@ -986,7 +986,11 @@ def _render_entregas_tab(
         (column, label, sorted(_series_text(filtered, column).replace("", pd.NA).dropna().unique()))
         for column, label in filter_specs if column in filtered.columns
     ]
-    available_filters = [(column, label, values) for column, label, values in available_filters if values]
+    available_filters = [
+        (column, label, values)
+        for column, label, values in available_filters
+        if values and (column != "calidad_identificacion" or len(values) > 1)
+    ]
     if available_filters:
         st.write("**Filtros**")
         filter_columns = st.columns(len(available_filters))
