@@ -13,17 +13,6 @@ st.set_page_config(
 
 paginas = [
     st.Page("Home.py", title="Home", icon="🌾", default=True),
-    st.Page(
-        "pages/1_Productores.py",
-        title="Productores",
-        url_path="Productores",
-    ),
-    st.Page(
-        "pages/2_Detalle_DDJJ.py",
-        title="Detalle DDJJ",
-        url_path="Detalle_DDJJ",
-    ),
-    st.Page("pages/3_Adremas.py", title="Adremas", url_path="Adremas"),
     st.Page("pages/4_Mapa.py", title="Mapa", url_path="Mapa"),
     st.Page("pages/5_Analisis.py", title="Análisis", url_path="Analisis"),
     st.Page(
