@@ -12,12 +12,12 @@ st.set_page_config(
 )
 
 paginas = [
-    st.Page("Home.py", title="Home", icon="🌾", default=True),
-    st.Page("pages/4_Mapa.py", title="Mapa", url_path="Mapa"),
-    st.Page("pages/5_Analisis.py", title="Análisis", url_path="Analisis"),
+    st.Page("Home.py", title="🏠 Home", icon="🌾", default=True),
+    st.Page("pages/4_Mapa.py", title="🗺️ Mapa", url_path="Mapa"),
+    st.Page("pages/5_Analisis.py", title="📊 Análisis", url_path="Analisis"),
     st.Page(
         "pages/6_Ficha_Productor.py",
-        title="Ficha Productor",
+        title="👤 Ficha Productor",
         url_path="Ficha_Productor",
     ),
 ]
