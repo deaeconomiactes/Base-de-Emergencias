@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
@@ -10,6 +11,12 @@ import streamlit as st
 from utils import display_identifier, run_query
 
 st.title("Ficha integral del productor")
+
+
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+ENTREGAS_DIR = PROJECT_DIR / "data_processed" / "entregas" / "normalized"
+ENTREGAS_FACT_PATH = ENTREGAS_DIR / "fact_entregas_emergencia.csv"
+ENTREGAS_QUALITY_PATH = ENTREGAS_DIR / "fact_entregas_calidad_dato.csv"
 
 
 SIN_CLASIFICAR = {"", "(s/d)", "s/d", "sd", "sin dato", "sin datos", "none", "nan"}
@@ -770,6 +777,250 @@ def _sum_columns(df: pd.DataFrame, columns: list[str]) -> float:
     return float(total)
 
 
+@st.cache_data(show_spinner=False)
+def _read_local_csv(path_text: str, modified_ns: int) -> pd.DataFrame:
+    """Lee CSV local como texto; modified_ns invalida caché cuando cambia la fuente."""
+    del modified_ns
+    return pd.read_csv(path_text, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+
+
+def _load_local_entregas() -> tuple[pd.DataFrame, pd.DataFrame, bool]:
+    if not ENTREGAS_FACT_PATH.is_file():
+        return pd.DataFrame(), pd.DataFrame(), False
+    fact = _read_local_csv(str(ENTREGAS_FACT_PATH), ENTREGAS_FACT_PATH.stat().st_mtime_ns)
+    quality = pd.DataFrame()
+    if ENTREGAS_QUALITY_PATH.is_file():
+        quality = _read_local_csv(str(ENTREGAS_QUALITY_PATH), ENTREGAS_QUALITY_PATH.stat().st_mtime_ns)
+    return fact, quality, True
+
+
+def _normalized_digits(value) -> str:
+    text = re.sub(r"\.0$", "", _safe_str(value))
+    return re.sub(r"\D", "", text)
+
+
+def _normalized_agro_key(value) -> str:
+    text = _safe_str(value).upper()
+    if text.lower() in SIN_CLASIFICAR:
+        return ""
+    text = re.sub(r"\s*-\s*", "-", text)
+    return re.sub(r"\s+", "", text).strip("-")
+
+
+def _series_text(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series("", index=df.index, dtype="string")
+    return df[column].astype("string").fillna("").str.strip()
+
+
+def _selected_key_sets(
+    selected_row: pd.Series,
+    actual_row: pd.Series | None,
+    related: pd.DataFrame,
+    renspa_values: list[str],
+    adremas_df: pd.DataFrame,
+) -> dict[str, set[str]]:
+    cuit_values = [
+        actual_row.get("CUITCUIL") if actual_row is not None else None,
+        selected_row.get("cuit_cuil"), selected_row.get("cuit_norm"),
+        *related.get("cuit_cuil", pd.Series(dtype=object)).tolist(),
+        *related.get("cuit_norm", pd.Series(dtype=object)).tolist(),
+    ]
+    document_values = [
+        actual_row.get("DocumentoNro") if actual_row is not None else None,
+        selected_row.get("documento_nro"), selected_row.get("documento_norm"),
+        *related.get("documento_nro", pd.Series(dtype=object)).tolist(),
+        *related.get("documento_norm", pd.Series(dtype=object)).tolist(),
+    ]
+    adrema_values = adremas_df.get("adrema", pd.Series(dtype=object)).tolist()
+    return {
+        "cuit": {value for raw in cuit_values if (value := _normalized_digits(raw))},
+        "documento": {value for raw in document_values if (value := _normalized_digits(raw))},
+        "renspa": {value for raw in renspa_values if (value := _normalized_agro_key(raw))},
+        "adrema": {value for raw in adrema_values if (value := _normalized_agro_key(raw))},
+    }
+
+
+def _link_entregas(entregas: pd.DataFrame, keys: dict[str, set[str]]) -> pd.DataFrame:
+    if entregas.empty:
+        return entregas.copy()
+    linked = entregas.copy()
+    cuit = _series_text(linked, "cuit_cuil_norm").map(_normalized_digits)
+    document = _series_text(linked, "documento_norm").map(_normalized_digits)
+    renspa = _series_text(linked, "renspa").map(_normalized_agro_key)
+    adrema = _series_text(linked, "adrema").map(_normalized_agro_key)
+
+    cuit_match = cuit.ne("") & cuit.isin(keys["cuit"])
+    document_match = document.ne("") & document.isin(keys["documento"])
+    renspa_match = renspa.ne("") & renspa.isin(keys["renspa"])
+    adrema_match = adrema.ne("") & adrema.isin(keys["adrema"])
+    linked = linked[cuit_match | document_match | renspa_match | adrema_match].copy()
+    if linked.empty:
+        return linked
+
+    # Asigna la coincidencia de mayor prioridad y conserva una sola fila por entrega.
+    linked["tipo_coincidencia_entrega"] = "Sin coincidencia confiable"
+    linked["_match_priority"] = 99
+    for mask, label, priority in [
+        (adrema_match, "ADREMA exacta", 4),
+        (renspa_match, "RENSPA exacto", 3),
+        (document_match, "Documento exacto", 2),
+        (cuit_match, "CUIT/CUIL exacto", 1),
+    ]:
+        matching_index = mask[mask].index.intersection(linked.index)
+        linked.loc[matching_index, "tipo_coincidencia_entrega"] = label
+        linked.loc[matching_index, "_match_priority"] = priority
+    linked = linked.sort_values(["_match_priority", "entrega_id"], kind="stable")
+    return linked.drop_duplicates("entrega_id", keep="first").drop(columns="_match_priority")
+
+
+def _format_entrega_date(value) -> str:
+    text = _safe_str(value)
+    if not text:
+        return "Sin dato"
+    parsed = pd.to_datetime(text, errors="coerce")
+    return parsed.strftime("%Y-%m-%d") if not pd.isna(parsed) else "Sin dato"
+
+
+def _format_entrega_number(value) -> str:
+    text = _safe_str(value)
+    if not text:
+        return "Sin dato"
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return "Sin dato"
+    decimals = 0 if number.is_integer() else 2
+    return f"{number:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _render_entregas_tab(
+    entregas: pd.DataFrame,
+    quality: pd.DataFrame,
+    files_available: bool,
+) -> None:
+    st.subheader("Entregas / asistencia")
+    st.warning(
+        "La información de entregas/asistencia proviene de bases locales normalizadas "
+        "y validadas con advertencias. No modifica TiDB ni las vistas históricas."
+    )
+    if not files_available:
+        st.info(
+            "No se encontraron datos locales de entregas/asistencia. Ejecutar scripts "
+            "25 y 26 antes de consultar esta sección."
+        )
+        return
+    if entregas.empty:
+        st.info("No se encontraron entregas/asistencias con coincidencia confiable para este productor.")
+        with st.expander("Metodología de vinculación"):
+            _render_entregas_methodology()
+        return
+
+    delivery_ids = set(_series_text(entregas, "entrega_id"))
+    delivery_alerts = quality[
+        _series_text(quality, "entrega_id").isin(delivery_ids)
+    ].copy() if not quality.empty else pd.DataFrame()
+    duplicate_count = int(
+        _series_text(delivery_alerts, "alerta_tipo").eq("posible_duplicado").sum()
+    ) if not delivery_alerts.empty else 0
+    if duplicate_count:
+        st.warning("Existen registros marcados como posibles duplicados; se conservan para trazabilidad.")
+
+    numeric_amount = pd.to_numeric(_series_text(entregas, "monto_estimado"), errors="coerce")
+    numeric_quantity = pd.to_numeric(_series_text(entregas, "cantidad"), errors="coerce")
+    years = _series_text(entregas, "anio").replace("", pd.NA).dropna()
+    providers = _series_text(entregas, "proveedor").replace("", pd.NA).dropna()
+    linked_renspa = _series_text(entregas, "renspa").replace("", pd.NA).dropna()
+    metrics = st.columns(3)
+    metrics[0].metric("Entregas registradas", f"{len(entregas):,}")
+    metrics[1].metric("Años con asistencia", f"{years.nunique():,}")
+    metrics[2].metric("Proveedores", f"{providers.nunique():,}")
+    metrics = st.columns(3)
+    metrics[0].metric("RENSPA vinculados", f"{linked_renspa.nunique():,}")
+    metrics[1].metric(
+        "Monto total informado",
+        _format_entrega_number(numeric_amount.sum()) if numeric_amount.notna().any() else "Sin dato",
+    )
+    metrics[2].metric(
+        "Cantidad total informada",
+        _format_entrega_number(numeric_quantity.sum()) if numeric_quantity.notna().any() else "Sin dato",
+    )
+
+    filtered = entregas.copy()
+    filter_specs = [
+        ("anio", "Año"), ("proveedor", "Proveedor"),
+        ("tipo_asistencia", "Tipo de asistencia"),
+        ("calidad_identificacion", "Calidad identificación"),
+    ]
+    available_filters = [
+        (column, label, sorted(_series_text(filtered, column).replace("", pd.NA).dropna().unique()))
+        for column, label in filter_specs if column in filtered.columns
+    ]
+    available_filters = [(column, label, values) for column, label, values in available_filters if values]
+    if available_filters:
+        st.write("**Filtros**")
+        filter_columns = st.columns(len(available_filters))
+        selections: dict[str, list[str]] = {}
+        for container, (column, label, values) in zip(filter_columns, available_filters):
+            selections[column] = container.multiselect(
+                label, values, default=values, key=f"entregas_filter_{column}"
+            )
+        for column, selected_values in selections.items():
+            filtered = filtered[_series_text(filtered, column).isin(selected_values)]
+
+    table = filtered.copy()
+    table["fuente"] = (
+        _series_text(table, "fuente_archivo") + " / "
+        + _series_text(table, "fuente_hoja") + " / fila "
+        + _series_text(table, "source_row_number")
+    )
+    labels = {
+        "anio": "Año", "fecha_entrega": "Fecha de entrega",
+        "tipo_asistencia": "Tipo de asistencia", "proveedor": "Proveedor",
+        "insumo_producto": "Insumo / producto", "cantidad": "Cantidad",
+        "unidad": "Unidad", "monto_estimado": "Monto estimado", "renspa": "RENSPA",
+        "adrema": "ADREMA", "departamento": "Departamento", "localidad": "Localidad",
+        "norma_evento": "Norma / evento", "expediente": "Expediente",
+        "calidad_identificacion": "Calidad identificación",
+        "tipo_coincidencia_entrega": "Tipo de coincidencia", "fuente": "Fuente",
+    }
+    table = _rename_for_display(table, labels)
+    if "Fecha de entrega" in table.columns:
+        table["Fecha de entrega"] = table["Fecha de entrega"].map(_format_entrega_date)
+    for column in ["Cantidad", "Monto estimado"]:
+        if column in table.columns:
+            table[column] = table[column].map(_format_entrega_number)
+    st.dataframe(_clean_display_table(table), use_container_width=True, hide_index=True)
+
+    with st.expander("Ver alertas de calidad de entregas"):
+        if delivery_alerts.empty:
+            st.info("No hay alertas de calidad asociadas a las entregas vinculadas.")
+        else:
+            alert_labels = {
+                "alerta_tipo": "Tipo de alerta", "alerta_descripcion": "Descripción",
+                "severidad": "Severidad",
+            }
+            st.dataframe(
+                _clean_display_table(_rename_for_display(delivery_alerts, alert_labels)),
+                use_container_width=True, hide_index=True,
+            )
+    with st.expander("Metodología de vinculación"):
+        _render_entregas_methodology()
+
+
+def _render_entregas_methodology() -> None:
+    st.markdown(
+        """
+        - La coincidencia confiable se realiza, en orden, por CUIT/CUIL, documento, RENSPA o ADREMA exactos.
+        - Una entrega que coincide por varias claves se muestra una sola vez con la coincidencia de mayor prioridad.
+        - El nombre del productor no se usa para vincular automáticamente.
+        - Los posibles duplicados se conservan para trazabilidad y requieren conciliación administrativa.
+        - Las 892 filas clasificadas como 2023 desde archivos de la campaña/carpeta 2024 requieren validación administrativa.
+        - Esta integración usa archivos locales y no carga datos a TiDB ni modifica vistas históricas.
+        """
+    )
+
+
 with st.sidebar:
     st.header("Búsqueda")
     q = st.text_input("Nombre / CUIT / Documento", "")
@@ -870,6 +1121,10 @@ departamento = _display_value(
 )
 localidad = _display_value(actual_row["localidad"] if actual_row is not None else selected.get("localidad"))
 
+entregas_fact, entregas_quality, entregas_files_available = _load_local_entregas()
+entregas_keys = _selected_key_sets(selected, actual_row, related_productores, renspa_values, adremas)
+entregas = _link_entregas(entregas_fact, entregas_keys) if entregas_files_available else pd.DataFrame()
+
 c1, c2, c3 = st.columns(3)
 with c1:
     st.write(f"**Nombre / razón social:** {nombre}")
@@ -931,11 +1186,15 @@ st.caption(
     "en registros ganaderos puede no estar informada en el mismo campo que agricultura."
 )
 
-k9, _, _, _ = st.columns(4)
+k9, k10, _, _ = st.columns(4)
 k9.metric("Daño promedio", "-" if pd.isna(pondf_prom) else f"{pondf_prom:.2f}%")
+k10.metric("Entregas/asistencias", f"{len(entregas):,}" if entregas_files_available else "Sin datos locales")
 
-tab_ddjj, tab_agri, tab_gan, tab_geo, tab_calidad = st.tabs(
-    ["DDJJ", "Agricultura", "Ganadería", "Adremas / establecimientos", "Calidad de datos"]
+tab_ddjj, tab_agri, tab_gan, tab_geo, tab_entregas, tab_calidad = st.tabs(
+    [
+        "DDJJ", "Agricultura", "Ganadería", "Adremas / establecimientos",
+        "Entregas / asistencia", "Calidad de datos",
+    ]
 )
 
 with tab_ddjj:
@@ -1158,6 +1417,9 @@ with tab_geo:
             st.dataframe(_clean_display_table(mejoras), use_container_width=True, hide_index=True)
             st.write("**Documentación**")
             st.dataframe(_clean_display_table(documentacion), use_container_width=True, hide_index=True)
+
+with tab_entregas:
+    _render_entregas_tab(entregas, entregas_quality, entregas_files_available)
 
 with tab_calidad:
     st.subheader("Calidad de datos")
