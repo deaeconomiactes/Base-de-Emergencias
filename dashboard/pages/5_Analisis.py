@@ -130,7 +130,7 @@ def compact_number(value) -> str:
 def show_table(df: pd.DataFrame, title: str, height: int = 300) -> None:
     """Muestra tablas de apoyo siempre cerradas por defecto."""
     with st.expander(title, expanded=False):
-        st.dataframe(df, hide_index=True, width="stretch", height=height)
+        st.dataframe(df, hide_index=True, use_container_width=True, height=height)
 
 
 unified = is_unified_mode()
@@ -483,7 +483,7 @@ else:
             color_discrete_sequence=["#D97706"],
         )
         fig.update_layout(height=max(380, len(cultivos_plot) * 30), showlegend=False)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     else:
         melted = cultivos_plot.melt(
             id_vars=["Cultivo"], value_vars=["sembrada", "afectada"],
@@ -501,7 +501,7 @@ else:
             },
         )
         fig.update_layout(height=max(380, len(cultivos_plot) * 30))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     tabla_cultivos = cultivos.rename(
         columns={
             "sembrada": "Superficie sembrada",
@@ -576,7 +576,7 @@ else:
             labels={"existencias": "Cabezas"}, color_discrete_sequence=["#4C78A8"]
         )
         fig.update_layout(height=max(360, len(top_existencias) * 28), showlegend=False)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     with right:
         fig = px.bar(
             top_mortandad, x="mortandad", y=label_column, orientation="h",
@@ -584,7 +584,7 @@ else:
             labels={"mortandad": "Mortandad"}, color_discrete_sequence=["#E45756"]
         )
         fig.update_layout(height=max(360, len(top_mortandad) * 28), showlegend=False)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     if (
         ganaderia_original["mortandad"].fillna(0)
         > ganaderia_original["existencias"].fillna(0)
@@ -623,7 +623,7 @@ else:
         color_discrete_sequence=["#59A14F"],
     )
     fig.update_layout(height=max(380, len(mejoras_plot) * 30), showlegend=False)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
     st.caption(
         "Se consideran mejoras afectadas solo aquellas con valor o incidencia positiva informada."
     )
@@ -661,7 +661,7 @@ else:
         color_discrete_sequence=["#4C78A8"],
     )
     fig.update_layout(height=max(400, len(actividades_plot) * 30), showlegend=False)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
     show_table(
         actividades[["Actividad", "productores"]].rename(columns={"productores": "Productores"}),
         "Ver tabla de actividades",

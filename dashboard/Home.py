@@ -508,7 +508,7 @@ if not df_evolucion.empty:
                 st.dataframe(
                     tabla_evolucion,
                     hide_index=True,
-                    width="stretch",
+                    use_container_width=True,
                     height=altura_tabla(len(tabla_evolucion)),
                     column_config={
                         "Año": st.column_config.NumberColumn(
@@ -657,7 +657,7 @@ if not df_res.empty:
             st.dataframe(
                 tabla_resoluciones_mostrar,
                 hide_index=True,
-                width="stretch",
+                use_container_width=True,
                 height=altura_tabla(len(tabla_resoluciones_mostrar)),
                 column_config={
                     "Resolución / DTO": st.column_config.TextColumn(
@@ -750,7 +750,7 @@ with left:
             st.dataframe(
                 tabla_departamentos_mostrar,
                 hide_index=True,
-                width="stretch",
+                use_container_width=True,
                 height=altura_tabla(
                     len(tabla_departamentos_mostrar), maximo=280
                 ),
