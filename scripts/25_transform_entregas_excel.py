@@ -57,7 +57,9 @@ FIELD_PATTERNS: dict[str, list[str]] = {
     "proveedor": [r"^proveedor$"],
     "insumo_producto": [r"^insumo", r"^producto$", r"concepto", r"material"],
     "cantidad": [r"total.*kilos", r"cant.*rollos", r"^cantidad$", r"^cantidades$", r"^cant$", r"unidades"],
-    "unidad": [r"^unidad$", r"unidad.*medida", r"kg.*bolsa"],
+    "cantidad_bolsas": [r"^bolsas$", r"cant.*bolsas"],
+    "kg_por_bolsa": [r"kg.*bolsa", r"kilos.*bolsa"],
+    "unidad": [r"^unidad$", r"unidad.*medida"],
     "monto_estimado": [r"^monto$", r"^importe$", r"^valor$", r"^subsidio$", r"^saldo$"],
     "moneda": [r"moneda"],
     "norma_evento": [r"resolucion", r"decreto", r"^norma$", r"instrumento.*legal"],
@@ -261,17 +263,46 @@ def infer_product(column_value: Any, filename: str, sheetname: str) -> str:
     return "Sin dato"
 
 
-def infer_unit(headers: list[str], mapping: dict[str, int], row: tuple[Any, ...], sheetname: str) -> str:
-    explicit = clean_text(value_at(row, mapping, "unidad"))
-    if explicit:
-        return explicit
+def infer_quantity_unit_and_observation(
+    headers: list[str], mapping: dict[str, int], row: tuple[Any, ...], sheetname: str
+) -> tuple[float | None, bool, str, str]:
+    """Prioriza magnitud total; conserva bolsas y kg/bolsa como metadatos auxiliares."""
     quantity_position = mapping.get("cantidad")
     quantity_header = normalize_text(headers[quantity_position]) if quantity_position is not None else ""
-    if "kilo" in quantity_header or re.search(r"\d[\d._]*kg", normalize_text(sheetname)):
-        return "kg"
-    if "rollo" in quantity_header or "rollo" in normalize_text(sheetname):
-        return "rollo"
-    return ""
+    quantity_original = value_at(row, mapping, "cantidad")
+    quantity, quantity_failed = parse_number(quantity_original)
+
+    bag_original = value_at(row, mapping, "cantidad_bolsas")
+    bag_count, bag_failed = parse_number(bag_original)
+    kg_bag_original = value_at(row, mapping, "kg_por_bolsa")
+    kg_per_bag, kg_bag_failed = parse_number(kg_bag_original)
+
+    unit = clean_text(value_at(row, mapping, "unidad"))
+    if quantity is not None:
+        if "kilo" in quantity_header:
+            unit = "kg"
+        elif "rollo" in quantity_header or "rollo" in normalize_text(sheetname):
+            unit = "rollo"
+        elif not unit and re.search(r"\d[\d._]*kg", normalize_text(sheetname)):
+            unit = "kg"
+    elif bag_count is not None and not bag_failed:
+        # Solo usa bolsas como cantidad cuando no existe una magnitud total informada.
+        quantity = bag_count
+        quantity_failed = False
+        unit = "bolsa"
+
+    auxiliary: list[str] = []
+    if bag_count is not None and not bag_failed:
+        auxiliary.append(f"{bag_count:g} bolsas")
+    if kg_per_bag is not None and not kg_bag_failed:
+        auxiliary.append(f"{kg_per_bag:g} kg/bolsa")
+    observation = f"Datos auxiliares de entrega: {'; '.join(auxiliary)}" if auxiliary else ""
+    return quantity, quantity_failed, unit, observation
+
+
+def join_observations(*parts: Any) -> str:
+    values = [clean_text(part) for part in parts]
+    return "; ".join(value for value in values if value)
 
 
 def stable_id(record: dict[str, Any]) -> str:
@@ -365,11 +396,11 @@ def transform() -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
                 provider = infer_provider(value_at(row, mapping, "proveedor"), filename)
                 assistance = infer_assistance(value_at(row, mapping, "tipo_asistencia"), filename, sheetname)
                 product = infer_product(value_at(row, mapping, "insumo_producto"), filename, sheetname)
-                quantity_original = value_at(row, mapping, "cantidad")
-                quantity, quantity_failed = parse_number(quantity_original)
+                quantity, quantity_failed, unit, quantity_observation = infer_quantity_unit_and_observation(
+                    headers, mapping, row, sheetname
+                )
                 amount_original = value_at(row, mapping, "monto_estimado")
                 amount, amount_failed = parse_number(amount_original)
-                unit = infer_unit(headers, mapping, row, sheetname)
                 currency = clean_text(value_at(row, mapping, "moneda"))
                 if amount is not None and not currency:
                     currency = "ARS"
@@ -390,7 +421,9 @@ def transform() -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
                     "fuente_archivo": filename, "fuente_hoja": sheetname,
                     "source_row_number": source_row_number, "origen_dato": ORIGIN,
                     "calidad_identificacion": "",
-                    "observaciones": clean_text(value_at(row, mapping, "observaciones")),
+                    "observaciones": join_observations(
+                        value_at(row, mapping, "observaciones"), quantity_observation
+                    ),
                 }
                 record["entrega_id"] = stable_id(record)
                 record["calidad_identificacion"] = identification_quality(record)

@@ -272,6 +272,14 @@ def validate_values_and_source(validator: Validator, fact: pd.DataFrame) -> None
         invalid = int((informed & numeric.isna()).sum())
         validator.add("valores", f"{label} numérico o nulo", "PASS" if invalid == 0 else "FAIL", invalid, 0)
 
+    numeric_unit = fact["unidad"].str.strip().str.fullmatch(r"[-+]?\d+(?:[.,]\d+)?")
+    suspicious_units = int(numeric_unit.sum())
+    validator.add(
+        "valores", "Unidad no compuesta únicamente por números",
+        "PASS" if suspicious_units == 0 else "WARN", suspicious_units, 0,
+        "Una unidad numérica suele indicar que KG/Bolsa u otra columna auxiliar fue interpretada como unidad.",
+    )
+
     invalid_origin = int((fact["origen_dato"] != "entregas_emergencia_excel").sum())
     validator.add("fuente", "origen_dato estandarizado", "PASS" if invalid_origin == 0 else "FAIL", invalid_origin, 0, 'Valor esperado: "entregas_emergencia_excel".')
     empty_file = int(fact["fuente_archivo"].eq("").sum())
@@ -281,6 +289,32 @@ def validate_values_and_source(validator: Validator, fact: pd.DataFrame) -> None
     validator.add("fuente", "fuente_archivo informado", "PASS" if empty_file == 0 else "FAIL", empty_file, 0)
     validator.add("fuente", "fuente_hoja informada", "PASS" if empty_sheet == 0 else "FAIL", empty_sheet, 0)
     validator.add("fuente", "source_row_number informado y numérico", "PASS" if empty_row + invalid_row == 0 else "FAIL", empty_row + invalid_row, 0)
+
+
+def validate_control_cases(validator: Validator, fact: pd.DataFrame) -> None:
+    monetary = fact[fact["cuit_cuil_norm"].eq("20114713679")]
+    monetary_amount = pd.to_numeric(monetary["monto_estimado"], errors="coerce").sum(min_count=1)
+    monetary_quantity = int(monetary["cantidad"].ne("").sum())
+    validator.compare("casos_control", "CUIL 20114713679: registros conservados", len(monetary), 1, "FAIL")
+    validator.compare("casos_control", "CUIL 20114713679: monto total", float(monetary_amount) if pd.notna(monetary_amount) else None, 100000.0, "FAIL")
+    validator.compare("casos_control", "CUIL 20114713679: cantidad no informada", monetary_quantity, 0, "FAIL")
+
+    mixed = fact[fact["cuit_cuil_norm"].eq("27138026537")]
+    mixed_amount = pd.to_numeric(mixed["monto_estimado"], errors="coerce").sum(min_count=1)
+    mixed_quantity = pd.to_numeric(mixed["cantidad"], errors="coerce").sum(min_count=1)
+    quantity_rows = mixed[mixed["cantidad"].ne("")]
+    invalid_units = int(
+        quantity_rows["unidad"].str.strip().str.fullmatch(r"[-+]?\d+(?:[.,]\d+)?").sum()
+    )
+    non_kg_units = sorted(set(quantity_rows.loc[quantity_rows["unidad"].ne("kg"), "unidad"]))
+    validator.compare("casos_control", "CUIL 27138026537: registros conservados", len(mixed), 3, "FAIL")
+    validator.compare("casos_control", "CUIL 27138026537: monto total", float(mixed_amount) if pd.notna(mixed_amount) else None, 70000.0, "FAIL")
+    validator.compare("casos_control", "CUIL 27138026537: cantidad total conservada", float(mixed_quantity) if pd.notna(mixed_quantity) else None, 500.0, "FAIL")
+    validator.add(
+        "casos_control", "CUIL 27138026537: unidad textual kg",
+        "PASS" if invalid_units == 0 and not non_kg_units else "FAIL",
+        f"unidades numéricas={invalid_units}; otras unidades={non_kg_units or 'ninguna'}", "kg",
+    )
 
 
 def global_status(checks: pd.DataFrame) -> str:
@@ -347,6 +381,18 @@ def write_report(
         lines.extend(["", "## Alertas principales", "", "| Alerta | Filas |", "|---|---:|"])
         for label, count_value in sorted(alert_types.items(), key=lambda item: (-item[1], item[0])):
             lines.append(f"| {label} | {count_value} |")
+        monetary = fact[fact["cuit_cuil_norm"].eq("20114713679")]
+        mixed = fact[fact["cuit_cuil_norm"].eq("27138026537")]
+        lines.extend([
+            "", "## Casos de control", "",
+            f"- CUIL `20114713679`: {len(monetary)} registro; monto total "
+            f"{pd.to_numeric(monetary['monto_estimado'], errors='coerce').sum(min_count=1)}; "
+            f"filas con cantidad {int(monetary['cantidad'].ne('').sum())}.",
+            f"- CUIL `27138026537`: {len(mixed)} registros; monto total "
+            f"{pd.to_numeric(mixed['monto_estimado'], errors='coerce').sum(min_count=1)}; cantidad total "
+            f"{pd.to_numeric(mixed['cantidad'], errors='coerce').sum(min_count=1)}; unidades "
+            f"{', '.join(sorted(set(mixed.loc[mixed['cantidad'].ne(''), 'unidad']))) or 'Sin dato'}.",
+        ])
 
     lines.extend(["", "## Checks WARN y FAIL", "", "| Check | Estado | Descripción | Observado | Esperado |", "|---|---|---|---|---|"])
     relevant = checks[checks["estado"].isin(["WARN", "FAIL"])]
@@ -395,6 +441,7 @@ def main() -> None:
             validate_coverage(validator, fact)
             validate_duplicates(validator, fact, quality)
             validate_values_and_source(validator, fact)
+            validate_control_cases(validator, fact)
 
     checks = pd.DataFrame(validator.checks, columns=[
         "check_id", "categoria", "descripcion", "estado",
