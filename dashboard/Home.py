@@ -510,16 +510,6 @@ if not df_evolucion.empty:
                     hide_index=True,
                     use_container_width=True,
                     height=altura_tabla(len(tabla_evolucion)),
-                    column_config={
-                        "Año": st.column_config.NumberColumn(
-                            "Año", format="%d", width="small", alignment="center"
-                        ),
-                        "DDJJ": st.column_config.TextColumn(
-                            "DDJJ",
-                            width="small",
-                            alignment="right",
-                        ),
-                    },
                 )
     else:
         st.info("No hay datos temporales para los filtros seleccionados.")
@@ -659,16 +649,6 @@ if not df_res.empty:
                 hide_index=True,
                 use_container_width=True,
                 height=altura_tabla(len(tabla_resoluciones_mostrar)),
-                column_config={
-                    "Resolución / DTO": st.column_config.TextColumn(
-                        "Resolución / DTO", width="medium"
-                    ),
-                    "DDJJ": st.column_config.TextColumn(
-                        "DDJJ",
-                        width="small",
-                        alignment="right",
-                    ),
-                },
             )
 else:
     st.info("No hay declaraciones juradas para los filtros seleccionados.")
@@ -754,16 +734,6 @@ with left:
                 height=altura_tabla(
                     len(tabla_departamentos_mostrar), maximo=280
                 ),
-                column_config={
-                    "Departamento": st.column_config.TextColumn(
-                        "Departamento", width="medium"
-                    ),
-                    "DDJJ": st.column_config.TextColumn(
-                        "DDJJ",
-                        width="small",
-                        alignment="right",
-                    ),
-                },
             )
     else:
         st.info("No hay departamentos para los filtros seleccionados.")
