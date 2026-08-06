@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 import pandas as pd
@@ -115,13 +116,46 @@ def _has_column(df: pd.DataFrame, column: str) -> bool:
     return column in df.columns
 
 
+def normalize_search_text(value) -> str:
+    """Normaliza texto solo para comparar búsquedas; no altera el dato original."""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = unicodedata.normalize("NFKD", str(value).casefold())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_identifier_search(value) -> str:
+    """Conserva letras y dígitos para comparar CUIT, documento o RENSPA."""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    raw_text = str(value).strip()
+    text = re.sub(r"\.0$", "", raw_text)
+    text = unicodedata.normalize("NFKD", text.casefold())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    normalized = re.sub(r"[^a-z0-9]", "", text)
+    # RENSPA suele presentar un bloque de establecimiento con cero inicial,
+    # p. ej. 04.020.0.01787/02. Se acepta también su variante compacta
+    # 040200178702, sin alterar el código original mostrado.
+    if "/" in raw_text and len(normalized) == 13 and normalized[6] == "0":
+        normalized = normalized[:6] + normalized[7:]
+    return normalized
+
+
 def _normalize_numeric_search(value: str) -> str | None:
-    text = value.strip()
-    if re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", text):
-        return None
-    text = re.sub(r"\.0$", "", text)
-    text = re.sub(r"[\s.\-]", "", text)
-    return text if text.isdigit() else None
+    normalized = normalize_identifier_search(value)
+    return normalized if normalized.isdigit() else None
 
 
 def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
@@ -300,10 +334,13 @@ def _deduplicate_candidates(candidates_df: pd.DataFrame) -> pd.DataFrame:
     candidates_view = candidates_df.copy()
     cuit_norm = candidates_view.get("cuit_norm", pd.Series("", index=candidates_view.index)).astype("string").fillna("").str.strip()
     doc_norm = candidates_view.get("documento_norm", pd.Series("", index=candidates_view.index)).astype("string").fillna("").str.strip()
+    renspa_norm = candidates_view.get("renspa_norm", pd.Series("", index=candidates_view.index)).astype("string").fillna("").str.strip()
     candidates_view["_visual_key"] = candidates_view["productor_all_id"].astype(str)
     candidates_view.loc[doc_norm.ne(""), "_visual_key"] = "doc|" + doc_norm[doc_norm.ne("")]
     cuit_only_mask = cuit_norm.ne("") & doc_norm.eq("")
     candidates_view.loc[cuit_only_mask, "_visual_key"] = "cuit|" + cuit_norm[cuit_only_mask]
+    renspa_only_mask = renspa_norm.ne("") & doc_norm.eq("") & cuit_norm.eq("")
+    candidates_view.loc[renspa_only_mask, "_visual_key"] = "renspa|" + renspa_norm[renspa_only_mask]
     candidates_view = candidates_view.sort_values(
         ["_visual_key", "match_rank", "origin_rank", "eventos", "registros"],
         ascending=[True, True, True, False, False],
@@ -323,16 +360,23 @@ def _id_params(productor_ids: list[str]) -> tuple[str, dict[str, str]]:
 
 
 def _query_candidates(search_text: str, limit: int) -> pd.DataFrame:
-    numeric_search = _normalize_numeric_search(search_text)
+    name_search = normalize_search_text(search_text)
+    identifier_search = normalize_identifier_search(search_text)
+    raw_identifier_search = re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", search_text.casefold()))
+    expanded_identifier_search = (
+        identifier_search[:6] + "0" + identifier_search[6:]
+        if len(identifier_search) == 12 and identifier_search.isdigit()
+        else identifier_search
+    )
     base_select = """
         SELECT
-            productor_all_id,
+            p.productor_all_id,
             id_productor_actual,
             productor_hist_id,
             productor_nombre,
             documento_nro,
             cuit_cuil,
-            renspa,
+            COALESCE(NULLIF(TRIM(p.renspa), ''), dr.ddjj_renspa) AS renspa,
             actividad,
             departamento,
             localidad,
@@ -343,29 +387,83 @@ def _query_candidates(search_text: str, limit: int) -> pd.DataFrame:
             source_file,
             severidad_maxima,
             REGEXP_REPLACE(REGEXP_REPLACE(COALESCE(documento_nro, ''), '\\\\.0$', ''), '[^0-9]', '') AS documento_norm,
-            REGEXP_REPLACE(REGEXP_REPLACE(COALESCE(cuit_cuil, ''), '\\\\.0$', ''), '[^0-9]', '') AS cuit_norm
-        FROM vw_all_productores
+            REGEXP_REPLACE(REGEXP_REPLACE(COALESCE(cuit_cuil, ''), '\\\\.0$', ''), '[^0-9]', '') AS cuit_norm,
+            LOWER(REGEXP_REPLACE(COALESCE(p.renspa, ''), '[^[:alnum:]]', '')) AS renspa_norm,
+            COALESCE(dr.ddjj_renspa_norms, '') AS renspa_norms,
+            TRIM(REGEXP_REPLACE(
+                REGEXP_REPLACE(
+                    LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        COALESCE(productor_nombre, ''),
+                        'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o'), 'ú', 'u'), 'ü', 'u'), 'ñ', 'n')),
+                    '[^[:alnum:]]+', ' '
+                ),
+                '[[:space:]]+', ' '
+            )) AS nombre_norm
+        FROM vw_all_productores p
+        LEFT JOIN (
+            SELECT
+                productor_all_id,
+                GROUP_CONCAT(DISTINCT NULLIF(TRIM(renspa), '') ORDER BY renspa SEPARATOR ' | ') AS ddjj_renspa,
+                GROUP_CONCAT(
+                    DISTINCT LOWER(REGEXP_REPLACE(COALESCE(renspa, ''), '[^[:alnum:]]', ''))
+                    SEPARATOR ','
+                ) AS ddjj_renspa_norms
+            FROM vw_all_ddjj_personas
+            WHERE NULLIF(TRIM(renspa), '') IS NOT NULL
+            GROUP BY productor_all_id
+        ) dr ON dr.productor_all_id = p.productor_all_id
     """
 
-    if numeric_search:
-        params = {"q": numeric_search, "partial": f"%{numeric_search}%", "limit": int(limit)}
+    if identifier_search:
+        params = {
+            "q": identifier_search,
+            "q_raw": raw_identifier_search,
+            "q_expanded": expanded_identifier_search,
+            "partial": f"%{identifier_search}%",
+            "limit": int(limit),
+        }
         exact = run_query(
             f"""
             SELECT
                 *,
                 CASE
-                    WHEN documento_norm = :q THEN 'Documento exacto'
                     WHEN cuit_norm = :q THEN 'CUIT/CUIL exacto'
-                    ELSE 'Coincidencia parcial'
+                    WHEN documento_norm = :q THEN 'Documento exacto'
+                    WHEN renspa_norm IN (:q, :q_raw, :q_expanded)
+                      OR FIND_IN_SET(:q, renspa_norms) > 0
+                      OR FIND_IN_SET(:q_raw, renspa_norms) > 0
+                      OR FIND_IN_SET(:q_expanded, renspa_norms) > 0 OR (
+                        LENGTH(renspa_norm) = 13
+                        AND SUBSTRING(renspa_norm, 7, 1) = '0'
+                        AND CONCAT(SUBSTRING(renspa_norm, 1, 6), SUBSTRING(renspa_norm, 8)) = :q
+                    ) THEN 'RENSPA exacto'
+                    ELSE 'Nombre'
                 END AS tipo_coincidencia,
                 CASE
-                    WHEN documento_norm = :q THEN 1
-                    WHEN cuit_norm = :q THEN 2
-                    ELSE 3
+                    WHEN cuit_norm = :q THEN 1
+                    WHEN documento_norm = :q THEN 2
+                    WHEN renspa_norm IN (:q, :q_raw, :q_expanded)
+                      OR FIND_IN_SET(:q, renspa_norms) > 0
+                      OR FIND_IN_SET(:q_raw, renspa_norms) > 0
+                      OR FIND_IN_SET(:q_expanded, renspa_norms) > 0 OR (
+                        LENGTH(renspa_norm) = 13
+                        AND SUBSTRING(renspa_norm, 7, 1) = '0'
+                        AND CONCAT(SUBSTRING(renspa_norm, 1, 6), SUBSTRING(renspa_norm, 8)) = :q
+                    ) THEN 3
+                    ELSE 4
                 END AS match_rank,
                 CASE WHEN origen_dato = 'actual' THEN 0 ELSE 1 END AS origin_rank
             FROM ({base_select}) base
-            WHERE documento_norm = :q OR cuit_norm = :q
+            WHERE cuit_norm = :q OR documento_norm = :q
+               OR renspa_norm IN (:q, :q_raw, :q_expanded)
+               OR FIND_IN_SET(:q, renspa_norms) > 0
+               OR FIND_IN_SET(:q_raw, renspa_norms) > 0
+               OR FIND_IN_SET(:q_expanded, renspa_norms) > 0
+               OR (
+                    LENGTH(renspa_norm) = 13
+                    AND SUBSTRING(renspa_norm, 7, 1) = '0'
+                    AND CONCAT(SUBSTRING(renspa_norm, 1, 6), SUBSTRING(renspa_norm, 8)) = :q
+               )
             ORDER BY match_rank, origin_rank, COALESCE(eventos, 0) DESC,
                      COALESCE(registros, 0) DESC, productor_nombre
             LIMIT :limit
@@ -378,16 +476,16 @@ def _query_candidates(search_text: str, limit: int) -> pd.DataFrame:
             f"""
             SELECT
                 *,
-                'Coincidencia parcial' AS tipo_coincidencia,
-                3 AS match_rank,
+                'Nombre' AS tipo_coincidencia,
+                4 AS match_rank,
                 CASE WHEN origen_dato = 'actual' THEN 0 ELSE 1 END AS origin_rank
             FROM ({base_select}) base
-            WHERE documento_norm LIKE :partial OR cuit_norm LIKE :partial
+            WHERE nombre_norm LIKE :name_partial
             ORDER BY match_rank, origin_rank, COALESCE(eventos, 0) DESC,
                      COALESCE(registros, 0) DESC, productor_nombre
             LIMIT :limit
             """,
-            params,
+            {**params, "name_partial": f"%{name_search}%"},
         )
 
     return run_query(
@@ -415,12 +513,20 @@ def _query_candidates(search_text: str, limit: int) -> pd.DataFrame:
             4 AS match_rank,
             CASE WHEN origen_dato = 'actual' THEN 0 ELSE 1 END AS origin_rank
         FROM vw_all_productores
-        WHERE productor_nombre LIKE :q
+        WHERE TRIM(REGEXP_REPLACE(
+            REGEXP_REPLACE(
+                LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                    COALESCE(productor_nombre, ''),
+                    'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o'), 'ú', 'u'), 'ü', 'u'), 'ñ', 'n')),
+                '[^[:alnum:]]+', ' '
+            ),
+            '[[:space:]]+', ' '
+        )) LIKE :q
         ORDER BY match_rank, origin_rank, COALESCE(eventos, 0) DESC,
                  COALESCE(registros, 0) DESC, productor_nombre
         LIMIT :limit
         """,
-        {"q": f"%{search_text}%", "limit": int(limit)},
+        {"q": f"%{name_search}%", "limit": int(limit)},
     )
 
 
@@ -1092,11 +1198,11 @@ def _render_entregas_methodology() -> None:
 
 with st.sidebar:
     st.header("Búsqueda")
-    q = st.text_input("Nombre / CUIT / Documento", "")
+    q = st.text_input("Nombre / CUIT / Documento / RENSPA", "")
     limite = st.slider("Candidatos máximos", 10, 200, 50, step=10)
 
 if len(q.strip()) < 2:
-    st.info("Ingrese al menos 2 caracteres para buscar un productor por nombre, CUIT o documento.")
+    st.info("Ingrese al menos 2 caracteres para buscar un productor por nombre, CUIT, documento o RENSPA.")
     st.stop()
 
 candidates = _query_candidates(q.strip(), limite)
@@ -1105,9 +1211,9 @@ if candidates.empty:
     st.warning("No se encontraron productores para la busqueda ingresada.")
     st.stop()
 
-numeric_query = _normalize_numeric_search(q.strip())
-if numeric_query and candidates["tipo_coincidencia"].eq("Coincidencia parcial").all():
-    st.info("No se encontraron coincidencias exactas. Se muestran coincidencias parciales.")
+identifier_query = normalize_identifier_search(q.strip())
+if identifier_query and candidates["tipo_coincidencia"].eq("Nombre").all():
+    st.info("No se encontró un identificador exacto; se muestran coincidencias por nombre.")
 
 candidates_visual = _deduplicate_candidates(candidates)
 
@@ -1117,16 +1223,20 @@ candidate_view = candidates_visual[
         "productor_nombre",
         "cuit_cuil",
         "documento_nro",
-        "tipo_coincidencia",
+        "renspa",
         "actividad",
         "departamento",
         "eventos",
         "registros",
         "severidad_maxima",
+        "tipo_coincidencia",
 ]
 ].copy()
 candidate_view["cuit_cuil"] = candidate_view["cuit_cuil"].apply(lambda value: display_identifier(value, "cuit_cuil"))
 candidate_view["documento_nro"] = candidate_view["documento_nro"].apply(lambda value: display_identifier(value, "documento"))
+candidate_view["renspa"] = candidate_view["renspa"].apply(format_renspa)
+candidate_view["eventos"] = candidate_view["eventos"].apply(format_count)
+candidate_view["registros"] = candidate_view["registros"].apply(format_count)
 st.dataframe(
     _clean_display_table(_rename_for_display(candidate_view, DISPLAY_LABELS)),
     use_container_width=True,
