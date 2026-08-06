@@ -16,6 +16,7 @@ from display_format import (
     format_surface,
     format_year,
 )
+from data_quality_rules import METHODOLOGY_NOTE, quality_status
 from utils import is_unified_mode, run_query, table
 
 
@@ -260,12 +261,27 @@ where_unified = " AND ".join(filters_unified)
 where_actual = " AND ".join(filters_actual)
 
 # ---------- Datos ----------
+agri_excluded = 0
+gan_excluded = 0
 if unified:
     cultivos = safe_query(
         f"""
         SELECT COALESCE(especie, cultivo, '(s/d)') AS tipo_cultivo,
-               SUM(superficie_sembrada_uso) AS sembrada,
-               SUM(superficie_afectada) AS afectada,
+               SUM(CASE WHEN COALESCE(flag_agricola_afectada_mayor_uso,0)=0
+                         AND COALESCE(superficie_sembrada_uso,0)>=0
+                         AND COALESCE(superficie_afectada,0)>=0
+                         AND COALESCE(superficie_afectada,0)<=COALESCE(superficie_sembrada_uso,0)
+                        THEN superficie_sembrada_uso END) AS sembrada,
+               SUM(CASE WHEN COALESCE(flag_agricola_afectada_mayor_uso,0)=0
+                         AND COALESCE(superficie_sembrada_uso,0)>=0
+                         AND COALESCE(superficie_afectada,0)>=0
+                         AND COALESCE(superficie_afectada,0)<=COALESCE(superficie_sembrada_uso,0)
+                        THEN superficie_afectada END) AS afectada,
+               SUM(CASE WHEN COALESCE(flag_agricola_afectada_mayor_uso,0)<>0
+                         OR COALESCE(superficie_sembrada_uso,0)<0
+                         OR COALESCE(superficie_afectada,0)<0
+                         OR COALESCE(superficie_afectada,0)>COALESCE(superficie_sembrada_uso,0)
+                        THEN 1 ELSE 0 END) AS excluidos_calidad,
                COUNT(*) AS registros,
                COUNT(DISTINCT COALESCE(CAST(id_ddjj_actual AS CHAR), ddjj_hist_id,
                    iddj, codigo, solicitud_id)) AS ddjj
@@ -279,7 +295,18 @@ if unified:
     ganaderia = safe_query(
         f"""
         SELECT COALESCE(categoria, especie, actividad, 'GANADERIA') AS categoria,
-               SUM(existencias) AS existencias, SUM(mortandad) AS mortandad
+               SUM(CASE WHEN COALESCE(flag_mortandad_mayor_existencias,0)=0
+                         AND COALESCE(existencias,0)>=0 AND COALESCE(mortandad,0)>=0
+                         AND COALESCE(mortandad,0)<=COALESCE(existencias,0)
+                        THEN existencias END) AS existencias,
+               SUM(CASE WHEN COALESCE(flag_mortandad_mayor_existencias,0)=0
+                         AND COALESCE(existencias,0)>=0 AND COALESCE(mortandad,0)>=0
+                         AND COALESCE(mortandad,0)<=COALESCE(existencias,0)
+                        THEN mortandad END) AS mortandad,
+               SUM(CASE WHEN COALESCE(flag_mortandad_mayor_existencias,0)<>0
+                         OR COALESCE(existencias,0)<0 OR COALESCE(mortandad,0)<0
+                         OR COALESCE(mortandad,0)>COALESCE(existencias,0)
+                        THEN 1 ELSE 0 END) AS excluidos_calidad
         FROM {gan_table}
         WHERE {where_unified}
         GROUP BY COALESCE(categoria, especie, actividad, 'GANADERIA')
@@ -287,6 +314,23 @@ if unified:
         """,
         params_unified,
     )
+    agri_excluded_df = safe_query(
+        f"""SELECT COUNT(*) AS n FROM {agri_table} WHERE {where_unified}
+              AND (COALESCE(flag_agricola_afectada_mayor_uso,0)<>0
+                   OR COALESCE(superficie_sembrada_uso,0)<0
+                   OR COALESCE(superficie_afectada,0)<0
+                   OR COALESCE(superficie_afectada,0)>COALESCE(superficie_sembrada_uso,0))""",
+        params_unified,
+    )
+    gan_excluded_df = safe_query(
+        f"""SELECT COUNT(*) AS n FROM {gan_table} WHERE {where_unified}
+              AND (COALESCE(flag_mortandad_mayor_existencias,0)<>0
+                   OR COALESCE(existencias,0)<0 OR COALESCE(mortandad,0)<0
+                   OR COALESCE(mortandad,0)>COALESCE(existencias,0))""",
+        params_unified,
+    )
+    agri_excluded = int(agri_excluded_df.iloc[0]["n"]) if not agri_excluded_df.empty else 0
+    gan_excluded = int(gan_excluded_df.iloc[0]["n"]) if not gan_excluded_df.empty else 0
 else:
     cultivos = safe_query(
         f"""
@@ -467,6 +511,9 @@ else:
 # ---------- Afectación agrícola ----------
 st.divider()
 st.header("Afectación agrícola")
+st.caption(METHODOLOGY_NOTE)
+if agri_excluded:
+    st.warning(f"Se excluyeron {format_count(agri_excluded)} registros agrícolas incoherentes de sumas y porcentajes; permanecen en los controles de calidad.")
 if cultivos.empty or not {"tipo_cultivo", "sembrada", "afectada"}.issubset(cultivos.columns):
     st.info(MENSAJE_SIN_DATOS)
 else:
@@ -540,6 +587,11 @@ else:
 # ---------- Afectación ganadera ----------
 st.divider()
 st.header("Afectación ganadera")
+st.caption(METHODOLOGY_NOTE)
+if gan_excluded:
+    st.warning(f"Se excluyeron {format_count(gan_excluded)} registros ganaderos de existencias, mortandad y tasa; permanecen en conteos y auditoría.")
+if quality_status()["estado"] not in {"local_disponible", "tidb_staging"}:
+    st.info("La página usa banderas equivalentes de las vistas TiDB. Para consultar el detalle fila a fila en la nube se requiere publicar el registro global de calidad en TiDB.")
 vista_ganadera = st.selectbox(
     "Vista ganadera",
     ["Grandes grupos homologados", "Categorías originales"],

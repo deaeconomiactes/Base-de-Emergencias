@@ -13,6 +13,7 @@ import plotly.express as px
 import streamlit as st
 
 from display_format import format_count, format_percentage, format_year
+from data_quality_rules import METHODOLOGY_NOTE, unsuitable_ids
 
 from utils import (
     db_info,
@@ -63,6 +64,26 @@ fecha_base_filter = "" if is_unified_mode() else "WHERE fecha > '2000-01-01'"
 
 # ---------- KPIs ----------
 kpis = kpis_generales()
+if is_unified_mode():
+    excluded_ddjj = unsuitable_ids("DDJJ", "tramite_id", "apto_indicador_sustantivo")
+    exclusion_sql = ""
+    quality_params: dict[str, object] = {}
+    if excluded_ddjj:
+        placeholders = []
+        for index, value in enumerate(sorted(excluded_ddjj)):
+            key = f"quality_id_{index}"
+            placeholders.append(f":{key}")
+            quality_params[key] = value
+        exclusion_sql = f" AND COALESCE(CAST(ddjj_hist_id AS CHAR), '') NOT IN ({','.join(placeholders)})"
+    quality_average = run_query(
+        f"""SELECT AVG(pondf) AS promedio FROM {ddjj_table}
+            WHERE pondf BETWEEN 0 AND 100
+              AND COALESCE(flag_revision_manual,0)=0
+              {exclusion_sql}""",
+        quality_params,
+    )
+    if not quality_average.empty and pd.notna(quality_average.iloc[0]["promedio"]):
+        kpis["pondf_promedio"] = float(quality_average.iloc[0]["promedio"])
 
 
 def formato_conteo(valor) -> str:
@@ -92,6 +113,7 @@ c3.metric("Resoluciones", formato_conteo(kpis["resoluciones"]))
 c4.metric("Establecimientos", formato_conteo(kpis["establecimientos"]))
 c5.metric("Adremas", formato_conteo(kpis["adremas"]))
 c6.metric("Daño promedio", formato_porcentaje(kpis["pondf_promedio"]))
+st.caption(METHODOLOGY_NOTE)
 
 # ---------- Filtros globales ----------
 HOME_FILTER_KEYS = (

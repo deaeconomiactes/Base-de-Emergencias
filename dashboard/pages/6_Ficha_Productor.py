@@ -23,6 +23,7 @@ from display_format import (
     format_surface,
     format_year,
 )
+from data_quality_rules import METHODOLOGY_NOTE, query_flags, quality_status
 from utils import db_info, display_identifier, run_query
 
 st.title("Ficha integral del productor")
@@ -672,11 +673,24 @@ def _query_agricultura(productor_ids: list[str]) -> pd.DataFrame:
             departamento,
             actividad,
             cultivo,
-            SUM(superficie_sembrada_uso) AS superficie_sembrada,
-            SUM(superficie_afectada) AS superficie_afectada,
+            SUM(CASE WHEN COALESCE(flag_agricola_afectada_mayor_uso,0)=0
+                      AND COALESCE(superficie_sembrada_uso,0)>=0
+                      AND COALESCE(superficie_afectada,0)>=0
+                      AND COALESCE(superficie_afectada,0)<=COALESCE(superficie_sembrada_uso,0)
+                     THEN superficie_sembrada_uso END) AS superficie_sembrada,
+            SUM(CASE WHEN COALESCE(flag_agricola_afectada_mayor_uso,0)=0
+                      AND COALESCE(superficie_sembrada_uso,0)>=0
+                      AND COALESCE(superficie_afectada,0)>=0
+                      AND COALESCE(superficie_afectada,0)<=COALESCE(superficie_sembrada_uso,0)
+                     THEN superficie_afectada END) AS superficie_afectada,
             SUM(produccion_estimada) AS produccion_estimada,
             SUM(produccion_obtenida) AS produccion_obtenida,
             COUNT(*) AS registros,
+            SUM(CASE WHEN COALESCE(flag_agricola_afectada_mayor_uso,0)<>0
+                      OR COALESCE(superficie_sembrada_uso,0)<0
+                      OR COALESCE(superficie_afectada,0)<0
+                      OR COALESCE(superficie_afectada,0)>COALESCE(superficie_sembrada_uso,0)
+                     THEN 1 ELSE 0 END) AS registros_excluidos,
             COUNT(DISTINCT ddjj_all_id) AS ddjj,
             MAX(flag_agricola_afectada_mayor_uso) AS flag_agricola_afectada_mayor_uso,
             MAX(flag_superficie_total_menor_afectadas) AS flag_superficie_total_menor_afectadas,
@@ -734,9 +748,19 @@ def _query_ganaderia(productor_ids: list[str]) -> pd.DataFrame:
             categoria,
             SUM(superficie_ganadera_uso) AS superficie_ganadera_uso,
             SUM(superficie_ganadera_afectada) AS superficie_ganadera_afectada,
-            SUM(existencias) AS existencias,
-            SUM(mortandad) AS mortandad,
+            SUM(CASE WHEN COALESCE(flag_mortandad_mayor_existencias,0)=0
+                      AND COALESCE(existencias,0)>=0 AND COALESCE(mortandad,0)>=0
+                      AND COALESCE(mortandad,0)<=COALESCE(existencias,0)
+                     THEN existencias END) AS existencias,
+            SUM(CASE WHEN COALESCE(flag_mortandad_mayor_existencias,0)=0
+                      AND COALESCE(existencias,0)>=0 AND COALESCE(mortandad,0)>=0
+                      AND COALESCE(mortandad,0)<=COALESCE(existencias,0)
+                     THEN mortandad END) AS mortandad,
             COUNT(*) AS registros,
+            SUM(CASE WHEN COALESCE(flag_mortandad_mayor_existencias,0)<>0
+                      OR COALESCE(existencias,0)<0 OR COALESCE(mortandad,0)<0
+                      OR COALESCE(mortandad,0)>COALESCE(existencias,0)
+                     THEN 1 ELSE 0 END) AS registros_excluidos,
             COUNT(DISTINCT ddjj_all_id) AS ddjj,
             MAX(flag_ganadera_afectada_mayor_uso) AS flag_ganadera_afectada_mayor_uso,
             MAX(flag_mortandad_mayor_existencias) AS flag_mortandad_mayor_existencias,
@@ -1078,7 +1102,10 @@ def _render_entregas_tab(
         _series_text(delivery_alerts, "alerta_tipo").eq("posible_duplicado").sum()
     ) if not delivery_alerts.empty else 0
     if duplicate_count:
-        st.warning("Existen registros marcados como posibles duplicados; se conservan para trazabilidad.")
+        st.warning(
+            f"Existen {format_count(duplicate_count)} registros marcados como posibles duplicados. "
+            "Se mantienen visibles y los totales informados los incluyen; deben conciliarse antes de usar montos o cantidades como indicadores definitivos."
+        )
 
     numeric_amount = pd.to_numeric(_series_text(entregas, "monto_estimado"), errors="coerce")
     numeric_quantity = pd.to_numeric(_series_text(entregas, "cantidad"), errors="coerce")
@@ -1422,6 +1449,10 @@ with tab_ddjj:
 
 with tab_agri:
     st.subheader("Agricultura")
+    st.caption(METHODOLOGY_NOTE)
+    excluded_agri = int(pd.to_numeric(agricultura.get("registros_excluidos", 0), errors="coerce").fillna(0).sum()) if not agricultura.empty else 0
+    if excluded_agri:
+        st.warning(f"{format_count(excluded_agri)} registros agrícolas se excluyen de superficies y porcentajes, pero permanecen trazables en la ficha.")
     if agricultura.empty:
         st.info("No hay datos agrícolas asociados para este productor.")
     else:
@@ -1505,6 +1536,10 @@ with tab_agri:
 
 with tab_gan:
     st.subheader("Ganadería")
+    st.caption(METHODOLOGY_NOTE)
+    excluded_livestock = int(pd.to_numeric(ganaderia.get("registros_excluidos", 0), errors="coerce").fillna(0).sum()) if not ganaderia.empty else 0
+    if excluded_livestock:
+        st.warning(f"{format_count(excluded_livestock)} registros ganaderos se excluyen de existencias, mortandad y tasa; se conservan para auditoría.")
     if ganaderia.empty:
         st.info("No hay datos ganaderos asociados para este productor.")
     else:
@@ -1616,6 +1651,21 @@ with tab_entregas:
 
 with tab_calidad:
     st.subheader("Calidad de datos")
+    global_quality = query_flags(
+        tramite_ids=ddjj.get("ddjj_hist_id", pd.Series(dtype=object)).dropna().astype(str).tolist(),
+        entrega_ids=entregas.get("entrega_id", pd.Series(dtype=object)).dropna().astype(str).tolist(),
+        adremas=adremas.get("adrema", pd.Series(dtype=object)).dropna().astype(str).tolist(),
+    )
+    if not global_quality.empty:
+        st.write("**Alertas consolidadas del sistema transversal**")
+        global_summary = (
+            global_quality.groupby(["modulo", "regla_calidad", "severidad"], dropna=False)
+            .size().reset_index(name="cantidad")
+            .rename(columns={"modulo": "Módulo", "regla_calidad": "Regla", "severidad": "Severidad", "cantidad": "Cantidad"})
+        )
+        st.dataframe(_clean_display_table(global_summary), use_container_width=True, hide_index=True)
+    elif quality_status()["estado"] not in {"local_disponible", "tidb_staging"}:
+        st.info("El detalle transversal local no está disponible en esta ejecución. Las banderas equivalentes de las vistas TiDB continúan visibles en las tablas técnicas.")
     alerts: list[dict[str, object]] = []
     alerts.append({"alerta": "Nombre faltante", "cantidad": int(not bool(_safe_str(nombre)))})
     alerts.append({"alerta": "Documento y CUIT faltantes", "cantidad": int(not _safe_str(documento) and not _safe_str(cuit))})
