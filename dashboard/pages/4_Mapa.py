@@ -1,4 +1,4 @@
-"""Mapa operativo y resumen territorial DDJJ 2023."""
+"""Mapa operativo y resumen territorial del universo DDJJ unificado."""
 from __future__ import annotations
 
 import pandas as pd
@@ -14,41 +14,21 @@ st.title("Mapa y resumen territorial")
 unified = is_unified_mode()
 with st.sidebar:
     st.header("Filtros")
-    origen_sel = st.selectbox(
-        "Origen de datos", ["(todos)", "actual", "ddjj_2023_excel"],
-        format_func=lambda value: {"(todos)": "Todos", "actual": "Actual", "ddjj_2023_excel": "DDJJ 2023 Excel"}[value],
-    ) if unified else "actual"
+    if unified:
+        anios_df = run_query(
+            "SELECT DISTINCT anio FROM vw_all_ddjj_personas "
+            "WHERE anio IS NOT NULL ORDER BY anio DESC"
+        )
+    else:
+        anios_df = run_query(
+            "SELECT DISTINCT YEAR(fecha) AS anio FROM ddjj_personas "
+            "WHERE fecha IS NOT NULL ORDER BY anio DESC"
+        )
+    anios = ["(todos)"] + [int(value) for value in anios_df["anio"].dropna()]
     anio_sel = st.selectbox(
-        "Año", ["(todos)", 2023],
+        "Año", anios,
         format_func=lambda value: "Todos" if value == "(todos)" else format_year(value),
-    ) if unified else "(todos)"
-
-if unified and origen_sel in {"(todos)", "ddjj_2023_excel"}:
-    st.warning(
-        "La base DDJJ 2023 está integrada al registro, pero su representación cartográfica depende de la disponibilidad de geometrías/adremas unificadas."
     )
-    territorial = run_query(
-        """
-        SELECT COALESCE(NULLIF(TRIM(departamento),''),'Sin departamento') AS departamento,
-               COUNT(DISTINCT ddjj_all_id) AS ddjj,
-               COUNT(DISTINCT productor_all_id) AS productores
-        FROM vw_all_ddjj_personas
-        WHERE origen_dato='ddjj_2023_excel' AND (:anio IS NULL OR anio=:anio)
-        GROUP BY COALESCE(NULLIF(TRIM(departamento),''),'Sin departamento')
-        ORDER BY ddjj DESC
-        """,
-        {"anio": None if anio_sel == "(todos)" else int(anio_sel)},
-    )
-    st.subheader("DDJJ 2023 por departamento (sin geometría)")
-    territorial_display = territorial.rename(columns={"departamento": "Departamento", "ddjj": "DDJJ", "productores": "Productores"}).copy()
-    territorial_display["Departamento"] = territorial_display["Departamento"].map(clean_display_name)
-    for column in ["DDJJ", "Productores"]:
-        territorial_display[column] = territorial_display[column].map(format_count)
-    st.dataframe(territorial_display, use_container_width=True, hide_index=True)
-
-if origen_sel == "ddjj_2023_excel":
-    st.info("No se dibujan puntos: la fuente 2023 no contiene coordenadas validadas.")
-    st.stop()
 
 params = {"anio": None if anio_sel == "(todos)" else int(anio_sel)}
 totals = run_query(
@@ -58,6 +38,13 @@ totals = run_query(
     params,
 )
 total_establishments = int(totals.iloc[0]["total"]) if not totals.empty else 0
+adremas_without_gps = 0
+if unified and params["anio"] in {None, 2023}:
+    adremas_result = run_query(
+        "SELECT COUNT(DISTINCT adrema_id_2023) AS total "
+        "FROM stg_ddjj_2023_adrema WHERE COALESCE(dq_tramite_huerfano,0)=0"
+    )
+    adremas_without_gps = int(adremas_result.iloc[0]["total"]) if not adremas_result.empty else 0
 df = run_query(
     """
     SELECT e.id_establecimiento, e.nombre_estab, e.departamento_estab,
@@ -83,10 +70,16 @@ if map_excluded_ids:
     df = df[~df["id_establecimiento"].astype(str).isin(map_excluded_ids)].copy()
 st.subheader("Establecimientos con coordenadas operativas")
 coverage = len(df) / total_establishments * 100 if total_establishments else 0.0
-m1, m2, m3 = st.columns(3)
+m1, m2, m3, m4 = st.columns(4)
 m1.metric("Establecimientos totales", format_count(total_establishments))
-m2.metric("Georreferenciados aptos", format_count(len(df)))
-m3.metric("Cobertura", format_percentage(coverage, scale="0-100"))
+m2.metric("ADREMAS sin coordenadas", format_count(adremas_without_gps))
+m3.metric("Georreferenciados aptos", format_count(len(df)))
+m4.metric("Cobertura de establecimientos", format_percentage(coverage, scale="0-100"))
+if adremas_without_gps:
+    st.caption(
+        "Las ADREMAS sin coordenadas forman parte del universo territorial no georreferenciado "
+        "y no se convierten automáticamente en puntos ni establecimientos."
+    )
 st.caption(METHODOLOGY_NOTE)
 if quality_status()["estado"] not in {"local_disponible", "tidb_staging"}:
     st.warning(

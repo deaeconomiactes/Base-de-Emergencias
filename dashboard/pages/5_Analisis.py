@@ -202,18 +202,6 @@ with st.sidebar:
     anio_sel = st.selectbox(
         "Año", anios, format_func=lambda value: "Todos" if value == "(todos)" else format_year(value)
     )
-    origen_sel = "(todos)"
-    if unified:
-        origen_sel = st.selectbox(
-            "Origen de datos",
-            ["(todos)", "actual", "historico", "ddjj_2023_excel"],
-            format_func=lambda value: {
-                "(todos)": "Todos",
-                "actual": "Actual",
-                "historico": "Histórico",
-                "ddjj_2023_excel": "DDJJ 2023 Excel",
-            }[value],
-        )
     top_n = st.selectbox("Top N", [10, 15, 20, 30, 50], index=2)
     metric_order = st.selectbox(
         "Ordenar cultivos por",
@@ -253,10 +241,6 @@ if anio_sel != "(todos)":
     else:
         filters_actual.append("YEAR(dj.fecha) = :anio")
         params_actual["anio"] = int(anio_sel)
-if unified and origen_sel != "(todos)":
-    filters_unified.append("origen_dato = :origen_dato")
-    params_unified["origen_dato"] = origen_sel
-
 where_unified = " AND ".join(filters_unified)
 where_actual = " AND ".join(filters_actual)
 
@@ -380,33 +364,27 @@ else:
     filters_mejoras = filters_actual.copy()
     params_mejoras = params_actual.copy()
 
-if unified and origen_sel in {"historico", "ddjj_2023_excel"}:
-    df_mejoras = pd.DataFrame()
-else:
-    df_mejoras = safe_query(
-        f"""
-        SELECT COALESCE(NULLIF(TRIM(pm.mejora), ''), '(s/d)') AS mejora,
-               COUNT(DISTINCT pm.idddjj) AS ddjj_con_mejora,
-               ROUND(SUM(COALESCE(pm.vestimado, 0)), 0) AS valor_total,
-               ROUND(AVG(CASE WHEN pm.vestimado > 0 THEN pm.vestimado END), 0) AS valor_prom,
-               ROUND(AVG(CASE WHEN pm.incidencia > 0 THEN pm.incidencia END), 1) AS pct_perdida_prom
-        FROM perdidas_mejoras pm
-        JOIN ddjj_personas dj ON dj.id_ddjj = pm.idddjj
-        LEFT JOIN resoluciones r ON r.id_resolucion = dj.id_resolucion
-        WHERE {' AND '.join(filters_mejoras)}
-          AND (COALESCE(pm.vestimado, 0) > 0 OR COALESCE(pm.incidencia, 0) > 0
-               OR COALESCE(pm.pesesp, 0) > 0 OR COALESCE(pm.pesper, 0) > 0)
-        GROUP BY COALESCE(NULLIF(TRIM(pm.mejora), ''), '(s/d)')
-        """,
-        params_mejoras,
-    )
+df_mejoras = safe_query(
+    f"""
+    SELECT COALESCE(NULLIF(TRIM(pm.mejora), ''), '(s/d)') AS mejora,
+           COUNT(DISTINCT pm.idddjj) AS ddjj_con_mejora,
+           ROUND(SUM(COALESCE(pm.vestimado, 0)), 0) AS valor_total,
+           ROUND(AVG(CASE WHEN pm.vestimado > 0 THEN pm.vestimado END), 0) AS valor_prom,
+           ROUND(AVG(CASE WHEN pm.incidencia > 0 THEN pm.incidencia END), 1) AS pct_perdida_prom
+    FROM perdidas_mejoras pm
+    JOIN ddjj_personas dj ON dj.id_ddjj = pm.idddjj
+    LEFT JOIN resoluciones r ON r.id_resolucion = dj.id_resolucion
+    WHERE {' AND '.join(filters_mejoras)}
+      AND (COALESCE(pm.vestimado, 0) > 0 OR COALESCE(pm.incidencia, 0) > 0
+           OR COALESCE(pm.pesesp, 0) > 0 OR COALESCE(pm.pesper, 0) > 0)
+    GROUP BY COALESCE(NULLIF(TRIM(pm.mejora), ''), '(s/d)')
+    """,
+    params_mejoras,
+)
 
 if unified:
     tj_filters = ["1=1"]
     tj_params: dict = {}
-    if origen_sel != "(todos)":
-        tj_filters.append("p.origen_dato = :tj_origin")
-        tj_params["tj_origin"] = origen_sel
     if anio_sel != "(todos)":
         tj_filters.append(
             "EXISTS (SELECT 1 FROM vw_all_ddjj_personas d "
@@ -447,13 +425,6 @@ st.info(
     "de datos en el registro integrado."
 )
 
-if unified and origen_sel == "ddjj_2023_excel":
-    st.warning(
-        "DDJJ 2023 se incorpora al registro bajo Decreto 2099/23. Los valores "
-        "cuantitativos inválidos se excluyen de las sumas, pero los registros "
-        "se conservan para trazabilidad."
-    )
-
 st.subheader("Resumen ejecutivo")
 kpis: list[tuple[str, str]] = []
 if not cultivos.empty and "tipo_cultivo" in cultivos:
@@ -464,14 +435,8 @@ if not df_mejoras.empty and "mejora" in df_mejoras:
     kpis.append(("Tipos de mejoras", compact_number(df_mejoras["mejora"].nunique())))
 if not df_actividades.empty and "productores" in df_actividades:
     kpis.append(("Productores por actividad", compact_number(df_actividades["productores"].sum())))
-fuente = {
-    "(todos)": "Todas las fuentes",
-    "actual": "Actual",
-    "historico": "Histórico",
-    "ddjj_2023_excel": "DDJJ 2023 Excel",
-}.get(origen_sel, "Fuente operativa")
 periodo = "Todos los años" if anio_sel == "(todos)" else format_year(anio_sel)
-kpis.append(("Fuente / año", f"{fuente} · {periodo}"))
+kpis.append(("Período analizado", periodo))
 columns = st.columns(min(len(kpis), 5))
 for column, (label, value) in zip(columns, kpis):
     column.metric(label, value)

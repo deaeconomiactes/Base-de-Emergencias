@@ -120,8 +120,6 @@ HOME_FILTER_KEYS = (
     "home_resolucion",
     "home_departamentos",
     "home_anios",
-    "home_origen",
-    "home_origen_actual",
     "home_periodo",
     "home_filtrar_pondf",
     "home_pondf_rango",
@@ -199,13 +197,11 @@ def opciones_resolucion_legibles(
             if pd.notna(fecha):
                 anio = int(fecha.year)
 
-        origen = texto_resolucion_legible(row.get("origen_dato"))
         filas.append(
             {
                 "base": etiqueta_base,
                 "descripcion": descripcion,
                 "anio": anio,
-                "origen": origen,
                 "valor_real": row.get("id_resolucion"),
             }
         )
@@ -233,14 +229,6 @@ def opciones_resolucion_legibles(
         etiqueta = " · ".join(partes)
         if len(etiqueta) > 60:
             etiqueta = f"{etiqueta[:57].rstrip()}..."
-        if etiqueta in etiqueta_a_valor and item["origen"]:
-            origen_visible = {
-                "actual": "Actual",
-                "historico": "Histórico",
-            }.get(item["origen"], item["origen"])
-            sufijo = f" · {origen_visible}"
-            etiqueta = f"{etiqueta[:60 - len(sufijo)].rstrip()}{sufijo}"
-
         etiqueta_original = etiqueta
         numero_opcion = 2
         while etiqueta in etiqueta_a_valor:
@@ -288,28 +276,6 @@ with st.sidebar:
     )
 
     with st.expander("Filtros avanzados", expanded=False):
-        if is_unified_mode():
-            origen_labels = {
-                "Todos": "Todos",
-                "actual": "Actual",
-                "historico": "Histórico",
-                "ddjj_2023_excel": "DDJJ 2023 Excel",
-            }
-            origen_sel = st.selectbox(
-                "Fuente de datos",
-                list(origen_labels),
-                format_func=origen_labels.get,
-                key="home_origen",
-            )
-        else:
-            origen_sel = st.selectbox(
-                "Fuente de datos",
-                ["actual"],
-                format_func=lambda _valor: "Actual",
-                disabled=True,
-                key="home_origen_actual",
-            )
-
         fechas_df = run_query(
             f"SELECT MIN(fecha) AS mn, MAX(fecha) AS mx "
             f"FROM {ddjj_table} {fecha_base_filter}"
@@ -359,9 +325,6 @@ with st.sidebar:
         "pondf_max": pondf_max,
         "f_desde": str(f_desde),
         "f_hasta": str(f_hasta),
-        "origen_dato": (
-            None if not is_unified_mode() or origen_sel == "Todos" else origen_sel
-        ),
     }
 
 
@@ -379,12 +342,6 @@ def texto_filtro(valor, marcadores_todos=()) -> str:
 
 
 resolucion_texto = texto_filtro(res_sel, {"Todas"})
-origen_texto = {
-    "Todos": "Todos",
-    "actual": "Actual",
-    "historico": "Histórico",
-    "ddjj_2023_excel": "DDJJ 2023 Excel",
-}.get(origen_sel, texto_filtro(origen_sel))
 departamento_texto = texto_filtro(dep_sel)
 anio_texto = texto_filtro(anio_sel)
 rango_fechas_texto = (
@@ -402,10 +359,9 @@ if filtrar_pondf:
 
 with resumen_filtros.container():
     st.markdown("**Filtros activos**")
-    rf1, rf2, rf3 = st.columns(3)
+    rf1, rf2 = st.columns(2)
     rf1.caption(f"**Resolución:** {resolucion_texto}")
-    rf2.caption(f"**Fuente de datos:** {origen_texto}")
-    rf3.caption(f"**Departamento:** {departamento_texto}")
+    rf2.caption(f"**Departamento:** {departamento_texto}")
     rf4, rf5, rf6 = st.columns(3)
     rf4.caption(f"**Año:** {anio_texto}")
     rf5.caption(f"**Período:** {rango_fechas_texto}")
@@ -445,9 +401,6 @@ def where_filtros(prefix="dj.") -> tuple[str, dict]:
             placeholders_a.append(f":{k}")
             params[k] = a
         conds.append(f"YEAR({prefix}fecha) IN ({','.join(placeholders_a)})")
-    if is_unified_mode() and f.get("origen_dato"):
-        conds.append(f"{prefix}origen_dato = :origen_dato")
-        params["origen_dato"] = f["origen_dato"]
     if f.get("filtrar_pondf"):
         conds.append(f"{prefix}pondf BETWEEN :p_min AND :p_max")
         params["p_min"] = f["pondf_min"]

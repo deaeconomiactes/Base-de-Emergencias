@@ -1164,11 +1164,6 @@ def _render_entregas_tab(
             filtered = filtered[_series_text(filtered, column).isin(selected_values)]
 
     table = filtered.copy()
-    table["fuente"] = (
-        _series_text(table, "fuente_archivo") + " / "
-        + _series_text(table, "fuente_hoja") + " / fila "
-        + _series_text(table, "source_row_number")
-    )
     labels = {
         "anio": "Año", "fecha_entrega": "Fecha de entrega",
         "tipo_asistencia": "Tipo de asistencia", "proveedor": "Proveedor",
@@ -1177,7 +1172,7 @@ def _render_entregas_tab(
         "adrema": "ADREMA", "departamento": "Departamento", "localidad": "Localidad",
         "norma_evento": "Norma / evento", "expediente": "Expediente",
         "calidad_identificacion": "Calidad identificación",
-        "tipo_coincidencia_entrega": "Tipo de coincidencia", "fuente": "Fuente",
+        "tipo_coincidencia_entrega": "Tipo de coincidencia",
     }
     table = _rename_for_display(table, labels)
     if "Año" in table.columns:
@@ -1193,6 +1188,26 @@ def _render_entregas_tab(
     if "ADREMA" in table.columns:
         table["ADREMA"] = table["ADREMA"].map(format_adrema)
     st.dataframe(_clean_display_table(table), use_container_width=True, hide_index=True)
+
+    technical_delivery_columns = [
+        column for column in ["fuente_archivo", "fuente_hoja", "source_row_number"]
+        if column in filtered.columns
+    ]
+    if technical_delivery_columns:
+        with st.expander("Campos técnicos / auditoría de entregas"):
+            st.dataframe(
+                _clean_display_table(
+                    filtered[technical_delivery_columns].rename(
+                        columns={
+                            "fuente_archivo": "Archivo fuente",
+                            "fuente_hoja": "Hoja fuente",
+                            "source_row_number": "Fila fuente",
+                        }
+                    )
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
     with st.expander("Ver alertas de calidad de entregas"):
         if delivery_alerts.empty:
@@ -1217,7 +1232,7 @@ def _render_entregas_methodology() -> None:
         - Una entrega que coincide por varias claves se muestra una sola vez con la coincidencia de mayor prioridad.
         - El nombre del productor no se usa para vincular automáticamente.
         - Los posibles duplicados se conservan para trazabilidad y requieren conciliación administrativa.
-        - Las 892 filas clasificadas como 2023 desde archivos de la campaña/carpeta 2024 requieren validación administrativa.
+        - El año informado se conserva para trazabilidad y los casos inconsistentes requieren validación administrativa.
         - Esta integración usa archivos locales y no carga datos a TiDB ni modifica vistas históricas.
         """
     )
@@ -1352,9 +1367,8 @@ with c3:
     st.write(f"**Localidad:** {localidad}")
 
 st.caption(
-    "La ficha consolida registros actuales e históricos cuando la identificación "
-    "del productor es confiable. La trazabilidad de origen queda disponible en "
-    "Campos técnicos / auditoría."
+    "La ficha consolida todas las declaraciones vinculadas cuando la identificación "
+    "del productor es confiable. La trazabilidad queda disponible en Campos técnicos / auditoría."
 )
 
 ddjj_count = len(ddjj_unique)
@@ -1606,8 +1620,8 @@ with tab_gan:
 with tab_geo:
     st.subheader("Adremas / establecimientos")
     st.caption(
-        "La vinculación de adremas/establecimientos se muestra solo cuando existe "
-        "clave confiable en datos actuales."
+        "La vinculación de adremas y establecimientos se muestra cuando existe "
+        "una clave confiable en el universo integrado."
     )
     if adremas.empty:
         st.info("No hay adremas o establecimientos asociados para este productor.")
@@ -1632,9 +1646,9 @@ with tab_geo:
         )
         _render_technical_expander(adremas, "adremas")
 
-    with st.expander("Ponderaciones, mejoras y documentación actual"):
+    with st.expander("Ponderaciones, mejoras y documentación disponible"):
         if pd.isna(id_productor_actual):
-            st.info("Estas secciones solo estan disponibles para productores con clave actual.")
+            st.info("Estas secciones requieren una clave administrativa compatible.")
         else:
             st.write("**Ponderaciones por rubro**")
             st.dataframe(_clean_display_table(ponderaciones), use_container_width=True, hide_index=True)
