@@ -1,7 +1,16 @@
 """Router principal del dashboard de Emergencias Agropecuarias."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import streamlit as st
+
+# Helpers exclusivamente visuales. Se usa una carpeta separada sin convertirla en
+# paquete para no colisionar con el modulo historico dashboard/utils.py.
+DISPLAY_UTILS_DIR = Path(__file__).resolve().parent / "utils"
+if str(DISPLAY_UTILS_DIR) not in sys.path:
+    sys.path.insert(0, str(DISPLAY_UTILS_DIR))
 
 
 st.set_page_config(

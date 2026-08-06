@@ -8,6 +8,20 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from display_format import (
+    clean_display_name,
+    format_adrema,
+    format_count,
+    format_cuit_cuil,
+    format_date,
+    format_document,
+    format_money,
+    format_percentage,
+    format_quantity,
+    format_renspa,
+    format_surface,
+    format_year,
+)
 from utils import db_info, display_identifier, run_query
 
 st.title("Ficha integral del productor")
@@ -127,7 +141,7 @@ def _sum_with_availability(df: pd.DataFrame, column: str) -> tuple[float, bool]:
 
 
 def _format_ha(value: float, available: bool) -> str:
-    return f"{value:,.2f} ha" if available else "Sin dato"
+    return format_surface(value) if available else "Sin dato"
 
 
 def _format_metric_ha(value: float, available: bool, records_count: int) -> str:
@@ -148,11 +162,11 @@ def _format_number_es(value, suffix: str = "") -> str:
 
 
 def _format_hectares(value) -> str:
-    return _format_number_es(value, " ha")
+    return format_surface(value)
 
 
 def _format_percent(value) -> str:
-    return _format_number_es(value, "%")
+    return format_percentage(value, scale="0-100")
 
 
 def _rename_for_display(df: pd.DataFrame, labels: dict[str, str]) -> pd.DataFrame:
@@ -172,6 +186,14 @@ def _format_display_columns(
     for column in percent_columns or []:
         if column in out.columns:
             out[column] = out[column].apply(_format_percent)
+    for column in out.columns:
+        normalized = column.casefold()
+        if normalized == "año":
+            out[column] = out[column].map(format_year)
+        elif normalized.startswith("fecha"):
+            out[column] = out[column].map(format_date)
+        elif normalized in {"existencias", "mortandad", "registros", "eventos"}:
+            out[column] = out[column].map(format_count)
     return out
 
 
@@ -900,11 +922,7 @@ def _link_entregas(entregas: pd.DataFrame, keys: dict[str, set[str]]) -> pd.Data
 
 
 def _format_entrega_date(value) -> str:
-    text = _safe_str(value)
-    if not text:
-        return "Sin dato"
-    parsed = pd.to_datetime(text, errors="coerce")
-    return parsed.strftime("%Y-%m-%d") if not pd.isna(parsed) else "Sin dato"
+    return format_date(value)
 
 
 def _format_entrega_number(value) -> str:
@@ -962,19 +980,26 @@ def _render_entregas_tab(
     providers = _series_text(entregas, "proveedor").replace("", pd.NA).dropna()
     linked_renspa = _series_text(entregas, "renspa").replace("", pd.NA).dropna()
     metrics = st.columns(3)
-    metrics[0].metric("Entregas registradas", f"{len(entregas):,}")
-    metrics[1].metric("Años con asistencia", f"{years.nunique():,}")
-    metrics[2].metric("Proveedores", f"{providers.nunique():,}")
+    metrics[0].metric("Entregas registradas", format_count(len(entregas)))
+    metrics[1].metric("Años con asistencia", format_count(years.nunique()))
+    metrics[2].metric("Proveedores", format_count(providers.nunique()))
     metrics = st.columns(3)
-    metrics[0].metric("RENSPA vinculados", f"{linked_renspa.nunique():,}")
+    metrics[0].metric("RENSPA vinculados", format_count(linked_renspa.nunique()))
     metrics[1].metric(
         "Monto total informado",
-        _format_entrega_number(numeric_amount.sum()) if numeric_amount.notna().any() else "Sin dato",
+        format_money(numeric_amount.sum(), currency="ARS") if numeric_amount.notna().any() else "Sin dato",
     )
-    metrics[2].metric(
-        "Cantidad total informada",
-        _format_entrega_number(numeric_quantity.sum()) if numeric_quantity.notna().any() else "Sin dato",
-    )
+    normalized_units = _series_text(entregas, "unidad").str.strip().str.casefold()
+    informed_units = sorted(unit for unit in normalized_units.unique() if unit)
+    if len(informed_units) == 1 and numeric_quantity.notna().any():
+        metrics[2].metric(
+            "Cantidad total informada",
+            format_quantity(numeric_quantity.sum(), informed_units[0]),
+        )
+    elif len(informed_units) > 1:
+        metrics[2].metric("Cantidades informadas por unidad", "Ver detalle")
+    else:
+        metrics[2].metric("Cantidad total informada", "Sin dato")
 
     filtered = entregas.copy()
     filter_specs = [
@@ -996,9 +1021,12 @@ def _render_entregas_tab(
         filter_columns = st.columns(len(available_filters))
         selections: dict[str, list[str]] = {}
         for container, (column, label, values) in zip(filter_columns, available_filters):
-            selections[column] = container.multiselect(
-                label, values, default=values, key=f"entregas_filter_{column}"
+            display_values = [format_year(value) for value in values] if column == "anio" else values
+            display_to_raw = dict(zip(display_values, values))
+            selected_display = container.multiselect(
+                label, display_values, default=display_values, key=f"entregas_filter_{column}"
             )
+            selections[column] = [display_to_raw[value] for value in selected_display]
         for column, selected_values in selections.items():
             filtered = filtered[_series_text(filtered, column).isin(selected_values)]
 
@@ -1019,11 +1047,18 @@ def _render_entregas_tab(
         "tipo_coincidencia_entrega": "Tipo de coincidencia", "fuente": "Fuente",
     }
     table = _rename_for_display(table, labels)
+    if "Año" in table.columns:
+        table["Año"] = table["Año"].map(format_year)
     if "Fecha de entrega" in table.columns:
         table["Fecha de entrega"] = table["Fecha de entrega"].map(_format_entrega_date)
-    for column in ["Cantidad", "Monto estimado"]:
-        if column in table.columns:
-            table[column] = table[column].map(_format_entrega_number)
+    if "Cantidad" in table.columns:
+        table["Cantidad"] = table["Cantidad"].map(format_quantity)
+    if "Monto estimado" in table.columns:
+        table["Monto estimado"] = table["Monto estimado"].map(lambda value: format_money(value, "ARS"))
+    if "RENSPA" in table.columns:
+        table["RENSPA"] = table["RENSPA"].map(format_renspa)
+    if "ADREMA" in table.columns:
+        table["ADREMA"] = table["ADREMA"].map(format_adrema)
     st.dataframe(_clean_display_table(table), use_container_width=True, hide_index=True)
 
     with st.expander("Ver alertas de calidad de entregas"):
@@ -1131,11 +1166,11 @@ ponderaciones, mejoras, documentacion = _query_documentacion(id_productor_actual
 st.divider()
 st.subheader("Datos del productor")
 
-nombre = _display_value(
+nombre = clean_display_name(
     actual_row["ProductorDenominacion"] if actual_row is not None else selected.get("productor_nombre")
 )
-cuit = display_identifier(actual_row["CUITCUIL"] if actual_row is not None else selected.get("cuit_cuil"), "cuit_cuil")
-documento = display_identifier(actual_row["DocumentoNro"] if actual_row is not None else selected.get("documento_nro"), "documento")
+cuit = format_cuit_cuil(actual_row["CUITCUIL"] if actual_row is not None else selected.get("cuit_cuil"))
+documento = format_document(actual_row["DocumentoNro"] if actual_row is not None else selected.get("documento_nro"))
 renspa_values: list[str] = []
 for value in [
     actual_row["renspa"] if actual_row is not None else None,
@@ -1144,7 +1179,7 @@ for value in [
     for item in re.split(r"\s*[|,;]\s*", _safe_str(value)):
         if item and item.lower() not in SIN_CLASIFICAR and item not in renspa_values:
             renspa_values.append(item)
-renspa = ", ".join(renspa_values) if renspa_values else "No registra"
+renspa = ", ".join(format_renspa(value) for value in renspa_values) if renspa_values else "No registra"
 actividad = _display_value(
     actual_row["actividad_principal"] if actual_row is not None else selected.get("actividad")
 )
@@ -1211,24 +1246,24 @@ pondf_prom = pd.to_numeric(ddjj_unique["pondf"], errors="coerce").dropna().mean(
 
 st.subheader("Indicadores")
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("DDJJ asociadas", f"{ddjj_count:,}")
-k2.metric("Resoluciones / eventos", f"{eventos_count:,}")
-k3.metric("Primer año", _display_value(primer_anio))
-k4.metric("Último año", _display_value(ultimo_anio))
+k1.metric("DDJJ asociadas", format_count(ddjj_count))
+k2.metric("Resoluciones / eventos", format_count(eventos_count))
+k3.metric("Primer año", format_year(primer_anio))
+k4.metric("Último año", format_year(ultimo_anio))
 
 k5, k6, k7, k8 = st.columns(4)
 k5.metric("Sup. agrícola afectada", _format_metric_ha(sup_agri, sup_agri_available, len(agricultura)))
 k6.metric("Sup. ganadera afectada", _format_metric_ha(sup_gan, sup_gan_available, len(ganaderia)))
-k7.metric("Registros agrícolas", f"{len(agricultura):,}")
-k8.metric("Registros ganaderos", f"{len(ganaderia):,}")
+k7.metric("Registros agrícolas", format_count(len(agricultura)))
+k8.metric("Registros ganaderos", format_count(len(ganaderia)))
 st.caption(
     "La superficie afectada se muestra solo cuando existe en las declaraciones vinculadas; "
     "en registros ganaderos puede no estar informada en el mismo campo que agricultura."
 )
 
 k9, k10, _, _ = st.columns(4)
-k9.metric("Daño promedio", "-" if pd.isna(pondf_prom) else f"{pondf_prom:.2f}%")
-k10.metric("Entregas/asistencias", f"{len(entregas):,}" if entregas_data_available else "Sin datos")
+k9.metric("Daño promedio", format_percentage(pondf_prom, scale="0-100"))
+k10.metric("Entregas/asistencias", format_count(len(entregas)) if entregas_data_available else "Sin datos")
 
 tab_ddjj, tab_agri, tab_gan, tab_geo, tab_entregas, tab_calidad = st.tabs(
     [
@@ -1440,8 +1475,13 @@ with tab_geo:
             "localidad": DISPLAY_LABELS["localidad"],
             "superficie": DISPLAY_LABELS["superficie"],
         }
+        adremas_display = _rename_for_display(adremas_view, adremas_labels)
+        if "Adrema" in adremas_display.columns:
+            adremas_display["Adrema"] = adremas_display["Adrema"].map(format_adrema)
+        if "Superficie" in adremas_display.columns:
+            adremas_display["Superficie"] = adremas_display["Superficie"].map(format_surface)
         st.dataframe(
-            _clean_display_table(_rename_for_display(adremas_view, adremas_labels)),
+            _clean_display_table(adremas_display),
             use_container_width=True,
             hide_index=True,
         )

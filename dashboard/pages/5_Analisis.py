@@ -8,6 +8,14 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from display_format import (
+    clean_display_name,
+    format_count,
+    format_money,
+    format_percentage,
+    format_surface,
+    format_year,
+)
 from utils import is_unified_mode, run_query, table
 
 
@@ -128,7 +136,20 @@ def compact_number(value) -> str:
 def show_table(df: pd.DataFrame, title: str, height: int = 300) -> None:
     """Muestra tablas de apoyo siempre cerradas por defecto."""
     with st.expander(title, expanded=False):
-        st.dataframe(df, hide_index=True, use_container_width=True, height=height)
+        display = df.copy()
+        for column in display.columns:
+            name = column.casefold()
+            if "superficie" in name:
+                display[column] = display[column].map(format_surface)
+            elif "%" in name or "tasa" in name or "incidencia" in name:
+                display[column] = display[column].map(lambda value: format_percentage(value, scale="0-100"))
+            elif name in {"existencias declaradas", "mortandad", "registros", "ddjj", "cantidad de ddjj", "productores"}:
+                display[column] = display[column].map(format_count)
+            elif "valor total" in name or "valor promedio" in name or "monto" in name:
+                display[column] = display[column].map(lambda value: format_money(value, "ARS"))
+            elif display[column].dtype == object:
+                display[column] = display[column].map(clean_display_name)
+        st.dataframe(display, hide_index=True, use_container_width=True, height=height)
 
 
 unified = is_unified_mode()
@@ -178,7 +199,7 @@ with st.sidebar:
     if "anio" in anios_df.columns:
         anios += [int(value) for value in anios_df["anio"].dropna().tolist()]
     anio_sel = st.selectbox(
-        "Año", anios, format_func=lambda value: "Todos" if value == "(todos)" else str(value)
+        "Año", anios, format_func=lambda value: "Todos" if value == "(todos)" else format_year(value)
     )
     origen_sel = "(todos)"
     if unified:
@@ -405,7 +426,7 @@ fuente = {
     "historico": "Histórico",
     "ddjj_2023_excel": "DDJJ 2023 Excel",
 }.get(origen_sel, "Fuente operativa")
-periodo = "Todos los años" if anio_sel == "(todos)" else str(anio_sel)
+periodo = "Todos los años" if anio_sel == "(todos)" else format_year(anio_sel)
 kpis.append(("Fuente / año", f"{fuente} · {periodo}"))
 columns = st.columns(min(len(kpis), 5))
 for column, (label, value) in zip(columns, kpis):
@@ -419,7 +440,7 @@ if not cultivos.empty and {"tipo_cultivo", "afectada"}.issubset(cultivos.columns
         row = valid.loc[valid["afectada"].idxmax()]
         quick_messages.append(
             f"Mayor superficie afectada: {display_label(row['tipo_cultivo'])} "
-            f"({compact_number(row['afectada'])} ha)."
+            f"({format_surface(row['afectada'])})."
         )
 if not ganaderia.empty and {"categoria", "existencias"}.issubset(ganaderia.columns):
     valid = ganaderia[ganaderia["existencias"].fillna(0) > 0]

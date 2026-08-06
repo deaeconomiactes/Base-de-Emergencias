@@ -12,6 +12,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from display_format import format_count, format_percentage, format_year
+
 from utils import (
     db_info,
     is_unified_mode,
@@ -64,11 +66,11 @@ kpis = kpis_generales()
 
 
 def formato_conteo(valor) -> str:
-    return "Sin dato" if es_sin_dato(valor) else f"{int(valor):,}"
+    return format_count(valor)
 
 
 def formato_porcentaje(valor) -> str:
-    return "Sin dato" if es_sin_dato(valor) else f"{valor:.1f}%"
+    return format_percentage(valor, scale="0-100")
 
 
 def altura_tabla(cantidad_filas: int, maximo: int = 300) -> int:
@@ -258,6 +260,7 @@ with st.sidebar:
     anio_sel = st.multiselect(
         "Año",
         anios_list,
+        format_func=format_year,
         placeholder="Todos",
         key="home_anios",
     )
@@ -496,9 +499,8 @@ if not df_evolucion.empty:
         st.plotly_chart(fig, use_container_width=True)
 
         tabla_evolucion = df_evolucion_anual[["Año", "DDJJ"]].copy()
-        tabla_evolucion["DDJJ"] = tabla_evolucion["DDJJ"].map(
-            lambda valor: f"{int(valor):,}"
-        )
+        tabla_evolucion["Año"] = tabla_evolucion["Año"].map(format_year)
+        tabla_evolucion["DDJJ"] = tabla_evolucion["DDJJ"].map(format_count)
         st.caption(
             "La serie anual se calcula con el campo fecha disponible y los filtros "
             "activos. Los años con cero indican ausencia de registros en el conjunto "
@@ -639,9 +641,7 @@ if not df_res.empty:
     )
     tabla_resoluciones["DDJJ"] = tabla_resoluciones["DDJJ"].astype(int)
     tabla_resoluciones_mostrar = tabla_resoluciones.copy()
-    tabla_resoluciones_mostrar["DDJJ"] = tabla_resoluciones_mostrar["DDJJ"].map(
-        lambda valor: f"{valor:,}"
-    )
+    tabla_resoluciones_mostrar["DDJJ"] = tabla_resoluciones_mostrar["DDJJ"].map(format_count)
 
     st.caption(
         "Las DDJJ sin número de resolución informado se reportan como Sin dato y "
@@ -727,9 +727,7 @@ with left:
         )
         tabla_departamentos["DDJJ"] = tabla_departamentos["DDJJ"].astype(int)
         tabla_departamentos_mostrar = tabla_departamentos.copy()
-        tabla_departamentos_mostrar["DDJJ"] = tabla_departamentos_mostrar[
-            "DDJJ"
-        ].map(lambda valor: f"{valor:,}")
+        tabla_departamentos_mostrar["DDJJ"] = tabla_departamentos_mostrar["DDJJ"].map(format_count)
         with st.expander("Ver tabla de departamentos", expanded=False):
             render_table_safe(
                 tabla_departamentos_mostrar,
@@ -815,12 +813,10 @@ with right:
             st.info("No hay datos de daño para los filtros seleccionados.")
 
         tabla_dano_mostrar = tabla_dano.copy()
-        tabla_dano_mostrar["DDJJ"] = tabla_dano_mostrar["DDJJ"].map(
-            lambda valor: f"{int(valor):,}"
-        )
+        tabla_dano_mostrar["DDJJ"] = tabla_dano_mostrar["DDJJ"].map(format_count)
         tabla_dano_mostrar["Participación"] = tabla_dano_mostrar[
             "Participación"
-        ].map(lambda valor: f"{valor:.1f}%")
+        ].map(lambda valor: format_percentage(valor, scale="0-100"))
         with st.expander("Ver tabla de tramos de daño", expanded=False):
             _, tabla_columna, _ = st.columns([1, 6, 1])
             with tabla_columna:

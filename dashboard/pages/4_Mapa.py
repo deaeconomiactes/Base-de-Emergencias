@@ -5,6 +5,7 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
+from display_format import clean_display_name, format_count, format_percentage, format_year
 from utils import fix_coord, is_unified_mode, run_query
 
 st.title("Mapa y resumen territorial")
@@ -16,7 +17,10 @@ with st.sidebar:
         "Origen de datos", ["(todos)", "actual", "ddjj_2023_excel"],
         format_func=lambda value: {"(todos)": "Todos", "actual": "Actual", "ddjj_2023_excel": "DDJJ 2023 Excel"}[value],
     ) if unified else "actual"
-    anio_sel = st.selectbox("Año", ["(todos)", 2023]) if unified else "(todos)"
+    anio_sel = st.selectbox(
+        "Año", ["(todos)", 2023],
+        format_func=lambda value: "Todos" if value == "(todos)" else format_year(value),
+    ) if unified else "(todos)"
 
 if unified and origen_sel in {"(todos)", "ddjj_2023_excel"}:
     st.warning(
@@ -35,7 +39,11 @@ if unified and origen_sel in {"(todos)", "ddjj_2023_excel"}:
         {"anio": None if anio_sel == "(todos)" else int(anio_sel)},
     )
     st.subheader("DDJJ 2023 por departamento (sin geometría)")
-    st.dataframe(territorial, use_container_width=True, hide_index=True)
+    territorial_display = territorial.rename(columns={"departamento": "Departamento", "ddjj": "DDJJ", "productores": "Productores"}).copy()
+    territorial_display["Departamento"] = territorial_display["Departamento"].map(clean_display_name)
+    for column in ["DDJJ", "Productores"]:
+        territorial_display[column] = territorial_display[column].map(format_count)
+    st.dataframe(territorial_display, use_container_width=True, hide_index=True)
 
 if origen_sel == "ddjj_2023_excel":
     st.info("No se dibujan puntos: la fuente 2023 no contiene coordenadas validadas.")
@@ -61,7 +69,7 @@ df["lng"] = df["longitud"].apply(fix_coord)
 df = df.dropna(subset=["lat", "lng"])
 df = df[df["lat"].between(-55, -21) & df["lng"].between(-74, -53)]
 st.subheader("Establecimientos con coordenadas operativas")
-st.caption(f"{len(df):,} establecimientos actuales con coordenadas válidas.")
+st.caption(f"{format_count(len(df))} establecimientos actuales con coordenadas válidas.")
 if df.empty:
     st.info("No hay coordenadas válidas para los filtros seleccionados.")
     st.stop()
@@ -73,4 +81,11 @@ df["radius"] = 400
 layer = pdk.Layer("ScatterplotLayer", data=df, get_position="[lng, lat]", get_radius="radius", get_fill_color="[r,g,b,180]", pickable=True)
 view = pdk.ViewState(latitude=float(df["lat"].mean()), longitude=float(df["lng"].mean()), zoom=6.5)
 st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view, map_style="light", tooltip={"html": "<b>{nombre_estab}</b><br/>Productor: {productor}<br/>DDJJ: {id_ddjj}<br/>Depto: {departamento_estab}"}))
-st.dataframe(df[["nombre_estab", "productor", "departamento_estab", "actividad", "pondf", "lat", "lng"]], use_container_width=True, hide_index=True)
+map_display = df[["nombre_estab", "productor", "departamento_estab", "actividad", "pondf", "lat", "lng"]].copy()
+map_display = map_display.rename(columns={"nombre_estab": "Establecimiento", "productor": "Productor", "departamento_estab": "Departamento", "actividad": "Actividad", "pondf": "Daño ponderado", "lat": "Latitud", "lng": "Longitud"})
+for column in ["Establecimiento", "Productor", "Departamento", "Actividad"]:
+    map_display[column] = map_display[column].map(clean_display_name)
+map_display["Daño ponderado"] = map_display["Daño ponderado"].map(lambda value: format_percentage(value, scale="0-100"))
+map_display["Latitud"] = pd.to_numeric(map_display["Latitud"], errors="coerce").round(6)
+map_display["Longitud"] = pd.to_numeric(map_display["Longitud"], errors="coerce").round(6)
+st.dataframe(map_display, use_container_width=True, hide_index=True)
